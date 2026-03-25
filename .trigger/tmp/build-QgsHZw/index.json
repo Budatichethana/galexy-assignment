@@ -1,0 +1,58 @@
+{
+  "configPath": "/home/ankul-raja/Desktop/galexy_assignment/.trigger/tmp/build-QgsHZw/trigger.config.mjs",
+  "customConditions": [
+  ],
+  "queues": [
+  ],
+  "runtime": "node",
+  "runtimeVersion": "20.20.0",
+  "tasks": [
+    {
+      "entryPoint": "/home/ankul-raja/Desktop/galexy_assignment/.trigger/tmp/build-QgsHZw/trigger/tasks/llmTask.mjs",
+      "filePath": "trigger/tasks/llmTask.ts",
+      "id": "llm-node",
+      "maxDuration": 300
+    },
+    {
+      "entryPoint": "/home/ankul-raja/Desktop/galexy_assignment/.trigger/tmp/build-QgsHZw/trigger/tasks/nodeTasks.mjs",
+      "filePath": "trigger/tasks/nodeTasks.ts",
+      "id": "text-node-task",
+      "maxDuration": 300
+    },
+    {
+      "entryPoint": "/home/ankul-raja/Desktop/galexy_assignment/.trigger/tmp/build-QgsHZw/trigger/tasks/nodeTasks.mjs",
+      "filePath": "trigger/tasks/nodeTasks.ts",
+      "id": "image-node-task",
+      "maxDuration": 300
+    },
+    {
+      "entryPoint": "/home/ankul-raja/Desktop/galexy_assignment/.trigger/tmp/build-QgsHZw/trigger/tasks/nodeTasks.mjs",
+      "filePath": "trigger/tasks/nodeTasks.ts",
+      "id": "video-node-task",
+      "maxDuration": 300
+    },
+    {
+      "entryPoint": "/home/ankul-raja/Desktop/galexy_assignment/.trigger/tmp/build-QgsHZw/trigger/tasks/nodeTasks.mjs",
+      "filePath": "trigger/tasks/nodeTasks.ts",
+      "id": "crop-node-task",
+      "maxDuration": 300
+    },
+    {
+      "entryPoint": "/home/ankul-raja/Desktop/galexy_assignment/.trigger/tmp/build-QgsHZw/trigger/tasks/nodeTasks.mjs",
+      "filePath": "trigger/tasks/nodeTasks.ts",
+      "id": "frame-node-task",
+      "maxDuration": 300
+    },
+    {
+      "entryPoint": "/home/ankul-raja/Desktop/galexy_assignment/.trigger/tmp/build-QgsHZw/trigger/tasks/nodeTasks.mjs",
+      "filePath": "trigger/tasks/nodeTasks.ts",
+      "id": "llm-node-task",
+      "maxDuration": 300
+    }
+  ],
+  "timings": {
+    "trigger/tasks/llmTask.ts": 2.9344389999999976,
+    "trigger/tasks/nodeTasks.ts": 1.3073530000000346
+  },
+  "workerEntryPoint": "/home/ankul-raja/Desktop/galexy_assignment/.trigger/tmp/build-QgsHZw/node_modules/trigger.dev/dist/esm/entryPoints/dev-run-worker.mjs"
+}
