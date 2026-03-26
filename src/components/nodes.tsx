@@ -19,6 +19,7 @@ export type NodeData = {
   onUserMessageChange?: (nodeId: string, value: string) => void;
   onRunSingle?: (nodeId: string) => Promise<void>;
   onRunPartial?: (nodeId: string) => Promise<void>;
+  onDeleteNode?: (nodeId: string) => void;
 };
 
 type BaseNodeCardProps = {
@@ -26,10 +27,11 @@ type BaseNodeCardProps = {
   title: string;
   placeholder: string;
   data?: NodeData;
+  selected?: boolean;
   children?: ReactNode;
 };
 
-function BaseNodeCard({ nodeId, title, placeholder, data, children }: BaseNodeCardProps) {
+function BaseNodeCard({ nodeId, title, placeholder, data, selected, children }: BaseNodeCardProps) {
   const isInputConnected = Boolean(data?.isInputConnected);
   const status = data?.status ?? "idle";
   const outputText = data?.output?.trim() ? data.output : "No output yet";
@@ -48,8 +50,37 @@ function BaseNodeCard({ nodeId, title, placeholder, data, children }: BaseNodeCa
 
   return (
     <div
-      className={`relative min-w-[290px] rounded-2xl border bg-[#111319]/90 p-4 shadow-[0_10px_35px_rgba(0,0,0,0.45)] backdrop-blur-xl transition-colors ${statusClassMap[status]}`}
+      className={`relative min-w-[290px] rounded-2xl border bg-[#111319]/90 p-4 shadow-[0_10px_35px_rgba(0,0,0,0.45)] backdrop-blur-xl transition-all ${statusClassMap[status]} ${
+        selected
+          ? "border-cyan-300/95 shadow-[0_0_0_1px_rgba(103,232,249,0.45),0_0_28px_rgba(34,211,238,0.65)]"
+          : ""
+      }`}
     >
+      <button
+        type="button"
+        aria-label="Delete node"
+        title="Delete node"
+        className="nodrag absolute -right-3 -top-3 z-20 rounded-full border border-white/20 bg-zinc-900/95 p-1.5 text-zinc-200 shadow-[0_6px_16px_rgba(0,0,0,0.35)] transition-colors hover:border-rose-300/60 hover:bg-rose-500/90 hover:text-white"
+        onClick={(event) => {
+          event.stopPropagation();
+          data?.onDeleteNode?.(nodeId);
+        }}
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          className="h-3.5 w-3.5"
+        >
+          <path d="M3 6h18" />
+          <path d="M8 6V4h8v2" />
+          <path d="M19 6l-1 14H6L5 6" />
+          <path d="M10 11v6" />
+          <path d="M14 11v6" />
+        </svg>
+      </button>
       <Handle
         type="target"
         position={Position.Left}
@@ -113,7 +144,7 @@ function BaseNodeCard({ nodeId, title, placeholder, data, children }: BaseNodeCa
   );
 }
 
-export function TextNode({ id, data }: NodeProps<NodeData>) {
+export function TextNode({ id, data, selected }: NodeProps<NodeData>) {
   const isInputConnected = Boolean(data?.isInputConnected);
 
   return (
@@ -122,6 +153,7 @@ export function TextNode({ id, data }: NodeProps<NodeData>) {
       title="Text Node"
       placeholder="Placeholder: text prompt"
       data={data}
+      selected={selected}
     >
       <textarea
         className="mt-2 h-20 w-full resize-none rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs text-zinc-200 outline-none transition-colors placeholder:text-zinc-500 focus:border-sky-300/60 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-zinc-500 disabled:opacity-70"
@@ -134,7 +166,7 @@ export function TextNode({ id, data }: NodeProps<NodeData>) {
   );
 }
 
-export function ImageNode({ id, data }: NodeProps<NodeData>) {
+export function ImageNode({ id, data, selected }: NodeProps<NodeData>) {
   const isInputConnected = Boolean(data?.isInputConnected);
 
   return (
@@ -143,6 +175,7 @@ export function ImageNode({ id, data }: NodeProps<NodeData>) {
       title="Image Node"
       placeholder="Placeholder: image upload"
       data={data}
+      selected={selected}
     >
       <input
         className="mt-2 w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs text-zinc-200 outline-none transition-colors placeholder:text-zinc-500 focus:border-sky-300/60 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-zinc-500 disabled:opacity-70"
@@ -155,7 +188,7 @@ export function ImageNode({ id, data }: NodeProps<NodeData>) {
   );
 }
 
-export function VideoNode({ id, data }: NodeProps<NodeData>) {
+export function VideoNode({ id, data, selected }: NodeProps<NodeData>) {
   const isInputConnected = Boolean(data?.isInputConnected);
 
   return (
@@ -164,6 +197,7 @@ export function VideoNode({ id, data }: NodeProps<NodeData>) {
       title="Video Node"
       placeholder="Placeholder: video upload"
       data={data}
+      selected={selected}
     >
       <input
         className="mt-2 w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs text-zinc-200 outline-none transition-colors placeholder:text-zinc-500 focus:border-sky-300/60 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-zinc-500 disabled:opacity-70"
@@ -176,7 +210,7 @@ export function VideoNode({ id, data }: NodeProps<NodeData>) {
   );
 }
 
-export function LLMNode({ id, data }: NodeProps<NodeData>) {
+export function LLMNode({ id, data, selected }: NodeProps<NodeData>) {
   const isInputConnected = Boolean(data?.isInputConnected);
 
   return (
@@ -185,6 +219,7 @@ export function LLMNode({ id, data }: NodeProps<NodeData>) {
       title="LLM Node"
       placeholder="Placeholder: model settings"
       data={data}
+      selected={selected}
     >
       <textarea
         className="mt-2 h-16 w-full resize-none rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs text-zinc-200 outline-none transition-colors placeholder:text-zinc-500 focus:border-sky-300/60 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-zinc-500 disabled:opacity-70"
@@ -204,7 +239,7 @@ export function LLMNode({ id, data }: NodeProps<NodeData>) {
   );
 }
 
-export function CropNode({ id, data }: NodeProps<NodeData>) {
+export function CropNode({ id, data, selected }: NodeProps<NodeData>) {
   const isInputConnected = Boolean(data?.isInputConnected);
 
   return (
@@ -213,6 +248,7 @@ export function CropNode({ id, data }: NodeProps<NodeData>) {
       title="Crop Node"
       placeholder="Placeholder: crop settings"
       data={data}
+      selected={selected}
     >
       <input
         className="mt-2 w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs text-zinc-200 outline-none transition-colors placeholder:text-zinc-500 focus:border-sky-300/60 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-zinc-500 disabled:opacity-70"
@@ -225,7 +261,7 @@ export function CropNode({ id, data }: NodeProps<NodeData>) {
   );
 }
 
-export function FrameNode({ id, data }: NodeProps<NodeData>) {
+export function FrameNode({ id, data, selected }: NodeProps<NodeData>) {
   const isInputConnected = Boolean(data?.isInputConnected);
 
   return (
@@ -234,6 +270,7 @@ export function FrameNode({ id, data }: NodeProps<NodeData>) {
       title="Frame Node"
       placeholder="Placeholder: frame extraction"
       data={data}
+      selected={selected}
     >
       <input
         className="mt-2 w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs text-zinc-200 outline-none transition-colors placeholder:text-zinc-500 focus:border-sky-300/60 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-zinc-500 disabled:opacity-70"

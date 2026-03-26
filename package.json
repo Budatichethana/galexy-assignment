@@ -11,22 +11,28 @@
     "trigger:deploy": "trigger deploy"
   },
   "dependencies": {
+    "@clerk/nextjs": "^7.0.7",
     "@google/generative-ai": "^0.24.1",
+    "@prisma/adapter-pg": "^7.5.0",
     "@trigger.dev/sdk": "^4.4.3",
     "bottleneck": "^2.19.5",
     "groq-sdk": "^1.1.1",
     "next": "16.2.1",
+    "pg": "^8.20.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "reactflow": "^11.11.4"
   },
   "devDependencies": {
+    "@prisma/client": "^7.5.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pg": "^8.20.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.1",
+    "prisma": "^7.5.0",
     "tailwindcss": "^4",
     "trigger.dev": "^4.4.3",
     "typescript": "^5"

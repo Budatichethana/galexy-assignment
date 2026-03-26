@@ -42,3 +42,12 @@ next-env.d.ts
 
 # local assistant direction file
 NEXTFLOW_COPILOT_INSTRUCTIONS.md
+
+# local Trigger runtime/cache files
+.trigger/
+
+# local Copilot skill metadata
+.agents/
+skills-lock.json
+
+/src/generated/prisma

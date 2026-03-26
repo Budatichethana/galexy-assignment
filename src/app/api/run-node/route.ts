@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import { tasks } from "@trigger.dev/sdk";
 import { runs } from "@trigger.dev/sdk/v3";
 import { NODE_TASK_IDS } from "@/lib/triggerTasks";
@@ -9,6 +10,11 @@ type RunNodeRequest = {
 
 export async function POST(request: Request) {
   try {
+    const { userId } = await auth();
+    if (!userId) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+
     const payload = (await request.json()) as RunNodeRequest;
     const prompt = payload.prompt?.trim();
 

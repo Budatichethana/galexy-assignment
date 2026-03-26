@@ -21,15 +21,56 @@ import {
   type NodeStatus,
   type NodeType,
 } from "@/components/nodes";
+import { HistorySidebar } from "@/components/HistorySidebar";
 
-const sidebarItems: Array<{ label: string; type: NodeType }> = [
-  { label: "Text", type: "text" },
-  { label: "Upload Image", type: "image" },
-  { label: "Upload Video", type: "video" },
-  { label: "LLM", type: "llm" },
-  { label: "Crop Image", type: "crop" },
-  { label: "Extract Frame", type: "frame" },
-];
+const sidebarItems = [
+  { label: "Text", type: "text" as const },
+  { label: "Upload Image", type: "image" as const },
+  { label: "Upload Video", type: "video" as const },
+  { label: "LLM", type: "llm" as const },
+  { label: "Crop Image", type: "crop" as const },
+  { label: "Extract Frame", type: "frame" as const },
+].map((item) => ({
+  ...item,
+  icon:
+    item.type === "text" ? (
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+        <path d="M4 5h12" />
+        <path d="M6.5 9h7" />
+        <path d="M8 13h4" />
+      </svg>
+    ) : item.type === "image" ? (
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+        <rect x="3" y="4" width="14" height="12" rx="2" />
+        <circle cx="8" cy="8" r="1.2" />
+        <path d="M5.5 14l3.5-3 2.3 2 2.7-2.5 2 3.5" />
+      </svg>
+    ) : item.type === "video" ? (
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+        <rect x="3" y="5" width="10" height="10" rx="2" />
+        <path d="M13 8l4-2v8l-4-2" />
+      </svg>
+    ) : item.type === "llm" ? (
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+        <path d="M10 3l1.2 3.3L14.5 7.5l-3.3 1.2L10 12l-1.2-3.3L5.5 7.5l3.3-1.2L10 3z" />
+        <path d="M4 13l.7 1.8L6.5 15l-1.8.7L4 17.5l-.7-1.8L1.5 15l1.8-.2L4 13z" />
+        <path d="M16 12l.8 2 2 .2-2 .8-.8 2-.8-2-2-.8 2-.2.8-2z" />
+      </svg>
+    ) : item.type === "crop" ? (
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+        <rect x="3" y="4" width="14" height="12" rx="2" />
+        <path d="M6 7.5h5v5H6z" />
+        <path d="M11 10h3" />
+        <path d="M9 12v3" />
+      </svg>
+    ) : (
+      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+        <rect x="3" y="4" width="14" height="12" rx="2" />
+        <path d="M7 4v12" />
+        <path d="M13 4v12" />
+      </svg>
+    ),
+}));
 
 const initialNodes: Node<NodeData, NodeType>[] = [
   {
@@ -55,14 +96,32 @@ const initialEdges: Edge[] = [
   },
 ];
 
+const WORKFLOW_ID_STORAGE_KEY = "nextflow:workflowId";
+
+function getNextNodeId(nodeList: Array<{ id: string }>) {
+  const maxNumericId = nodeList.reduce((maxValue, node) => {
+    const numericId = Number.parseInt(node.id, 10);
+    return Number.isNaN(numericId) ? maxValue : Math.max(maxValue, numericId);
+  }, 0);
+
+  return maxNumericId + 1;
+}
+
 export default function FlowCanvas() {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
-  const [isNodeDropdownOpen, setIsNodeDropdownOpen] = useState(false);
+  const [workflowId, setWorkflowId] = useState("");
+  const [workflowMessage, setWorkflowMessage] = useState("");
+  const [isSavingWorkflow, setIsSavingWorkflow] = useState(false);
+  const [isLoadingWorkflow, setIsLoadingWorkflow] = useState(false);
   const nextNodeId = useRef(3);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
+  
+  // Execution tracking
+  const currentRunIdRef = useRef<string | null>(null);
+  const nodeRunIdsRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     nodesRef.current = nodes;
@@ -172,6 +231,28 @@ export default function FlowCanvas() {
           .join("\n")
           .trim();
 
+        // Log node execution start
+        const runId = currentRunIdRef.current;
+        if (runId) {
+          const initResponse = await fetch("/api/node-run/init", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              runId,
+              nodeId,
+              nodeType: targetNode.type,
+              input: { prompt },
+            }),
+          });
+
+          if (initResponse.ok) {
+            const { nodeRunId } = (await initResponse.json()) as { nodeRunId: string };
+            nodeRunIdsRef.current.set(nodeId, nodeRunId);
+          }
+        }
+
         const response = await fetch("/api/run-node", {
           method: "POST",
           headers: {
@@ -187,6 +268,18 @@ export default function FlowCanvas() {
         const result = (await response.json()) as { output?: string };
         const outputText = result.output?.trim() || "No output";
 
+        // Log node execution success
+        const nodeRunId = nodeRunIdsRef.current.get(nodeId);
+        if (nodeRunId && runId) {
+          await fetch(`/api/node-run/${nodeRunId}/complete`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ output: outputText }),
+          });
+        }
+
         setNodes((currentNodes) =>
           currentNodes.map((node) =>
             node.id === nodeId
@@ -201,7 +294,22 @@ export default function FlowCanvas() {
               : node,
           ),
         );
-      } catch {
+      } catch (error) {
+        // Log node execution failure
+        const nodeRunId = nodeRunIdsRef.current.get(nodeId);
+        const runId = currentRunIdRef.current;
+        if (nodeRunId && runId) {
+          const errorMessage =
+            error instanceof Error ? error.message : "Unknown error";
+          await fetch(`/api/node-run/${nodeRunId}/fail`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ error: errorMessage }),
+          });
+        }
+
         setNodeStatus(nodeId, "failed");
       }
     },
@@ -275,14 +383,77 @@ export default function FlowCanvas() {
   );
 
   const executeWorkflow = useCallback(async () => {
-    await executeNodeSet(new Set(nodes.map((node) => node.id)));
-  }, [executeNodeSet, nodes]);
+    try {
+      // Initialize workflow run
+      if (!workflowId) {
+        setWorkflowMessage("Please save workflow first");
+        return;
+      }
+
+      const initRunResponse = await fetch("/api/workflow-run/init", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ workflowId }),
+      });
+
+      if (!initRunResponse.ok) {
+        throw new Error("Failed to initialize workflow run");
+      }
+
+      const { runId } = (await initRunResponse.json()) as { runId: string };
+      currentRunIdRef.current = runId;
+      nodeRunIdsRef.current.clear();
+
+      try {
+        // Execute all nodes
+        await executeNodeSet(new Set(nodes.map((node) => node.id)));
+
+        // Complete workflow run
+        await fetch(`/api/workflow-run/${runId}/complete`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ status: "success" }),
+        });
+
+        setWorkflowMessage(`Workflow completed. Run ID: ${runId}`);
+      } catch (error) {
+        // Mark workflow as failed
+        await fetch(`/api/workflow-run/${runId}/complete`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ status: "failed" }),
+        });
+
+        throw error;
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Workflow execution failed";
+      setWorkflowMessage(message);
+    }
+  }, [executeNodeSet, nodes, workflowId]);
 
   const runSingleNode = useCallback(
     async (nodeId: string) => {
       await executeNodeSet(new Set([nodeId]));
     },
     [executeNodeSet],
+  );
+
+  const handleDeleteNode = useCallback(
+    (nodeId: string) => {
+      setNodes((currentNodes) => currentNodes.filter((node) => node.id !== nodeId));
+      setEdges((currentEdges) =>
+        currentEdges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId),
+      );
+    },
+    [setEdges, setNodes],
   );
 
   const getAllParentNodes = useCallback(
@@ -331,11 +502,13 @@ export default function FlowCanvas() {
         onUserMessageChange: handleUserMessageChange,
         onRunSingle: runSingleNode,
         onRunPartial: executePartial,
+        onDeleteNode: handleDeleteNode,
       },
     }));
   }, [
     edges,
     executePartial,
+    handleDeleteNode,
     handleManualInputChange,
     handleSystemPromptChange,
     handleUserMessageChange,
@@ -349,6 +522,112 @@ export default function FlowCanvas() {
     },
     [setEdges],
   );
+
+  const applyLoadedWorkflow = useCallback(
+    (loadedNodes: Node<NodeData, NodeType>[], loadedEdges: Edge[]) => {
+      setNodes(loadedNodes);
+      setEdges(loadedEdges);
+      nextNodeId.current = getNextNodeId(loadedNodes);
+      nodesRef.current = loadedNodes;
+      edgesRef.current = loadedEdges;
+    },
+    [setEdges, setNodes],
+  );
+
+  const saveWorkflow = useCallback(async () => {
+    setIsSavingWorkflow(true);
+    setWorkflowMessage("");
+
+    try {
+      const response = await fetch("/api/workflow/save", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          nodes: nodesRef.current,
+          edges: edgesRef.current,
+        }),
+      });
+
+      const payload = (await response.json()) as {
+        workflowId?: string;
+        error?: string;
+      };
+
+      if (!response.ok || !payload.workflowId) {
+        throw new Error(payload.error || "Failed to save workflow");
+      }
+
+      setWorkflowId(payload.workflowId);
+      window.localStorage.setItem(WORKFLOW_ID_STORAGE_KEY, payload.workflowId);
+      setWorkflowMessage(`Saved workflow: ${payload.workflowId}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save workflow";
+      setWorkflowMessage(message);
+    } finally {
+      setIsSavingWorkflow(false);
+    }
+  }, []);
+
+  const loadWorkflow = useCallback(
+    async (idToLoad: string) => {
+      const trimmedId = idToLoad.trim();
+
+      if (!trimmedId) {
+        setWorkflowMessage("Enter a workflow ID to load");
+        return;
+      }
+
+      setIsLoadingWorkflow(true);
+      setWorkflowMessage("");
+
+      try {
+        const response = await fetch(`/api/workflow/${encodeURIComponent(trimmedId)}`);
+        const payload = (await response.json()) as {
+          id?: string;
+          nodes?: unknown;
+          edges?: unknown;
+          error?: string;
+        };
+
+        if (!response.ok) {
+          throw new Error(payload.error || "Failed to load workflow");
+        }
+
+        if (!Array.isArray(payload.nodes) || !Array.isArray(payload.edges)) {
+          throw new Error("Invalid workflow data returned from API");
+        }
+
+        applyLoadedWorkflow(
+          payload.nodes as Node<NodeData, NodeType>[],
+          payload.edges as Edge[],
+        );
+
+        const resolvedId = payload.id ?? trimmedId;
+        setWorkflowId(resolvedId);
+        window.localStorage.setItem(WORKFLOW_ID_STORAGE_KEY, resolvedId);
+        setWorkflowMessage(`Loaded workflow: ${resolvedId}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to load workflow";
+        setWorkflowMessage(message);
+      } finally {
+        setIsLoadingWorkflow(false);
+      }
+    },
+    [applyLoadedWorkflow],
+  );
+
+  useEffect(() => {
+    const storedWorkflowId = window.localStorage.getItem(WORKFLOW_ID_STORAGE_KEY);
+
+    if (!storedWorkflowId) {
+      return;
+    }
+
+    setWorkflowId(storedWorkflowId);
+    void loadWorkflow(storedWorkflowId);
+  }, [loadWorkflow]);
 
   const addNode = useCallback((type: NodeType) => {
     const id = String(nextNodeId.current);
@@ -374,53 +653,91 @@ export default function FlowCanvas() {
     <div className="relative h-screen w-screen overflow-hidden bg-[#07090f] text-zinc-100">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(67,97,238,0.08),transparent_34%),radial-gradient(circle_at_80%_75%,rgba(56,189,248,0.08),transparent_30%)]" />
 
-      <aside className="absolute left-4 top-4 z-20 w-56 rounded-2xl border border-white/15 bg-black/55 p-3 backdrop-blur-xl shadow-[0_12px_40px_rgba(0,0,0,0.45)]">
-        <h2 className="mb-2 text-sm font-semibold tracking-wide text-zinc-100">Nodes</h2>
-        <div className="relative flex flex-col gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              setIsNodeDropdownOpen((current) => !current);
-            }}
-            className="flex items-center justify-between rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-zinc-100 transition-colors hover:bg-white/15"
-          >
-            <span>Add Node</span>
-            <span className="text-xs text-zinc-300">▼</span>
-          </button>
-
-          {isNodeDropdownOpen ? (
-            <div className="absolute left-0 right-0 top-12 z-30 rounded-xl border border-white/15 bg-zinc-950/95 p-1 backdrop-blur-xl">
-              {sidebarItems.map((item) => (
-                <button
-                  key={item.type}
-                  type="button"
-                  onClick={() => {
-                    addNode(item.type);
-                    setIsNodeDropdownOpen(false);
-                  }}
-                  className="w-full rounded-lg px-3 py-2 text-left text-sm text-zinc-100 transition-colors hover:bg-white/10"
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          ) : null}
+      {/* Left Sidebar - Nodes */}
+      <aside className="group absolute left-4 top-4 z-20 w-[84px] overflow-hidden rounded-3xl border border-white/10 bg-white/5 p-3 backdrop-blur-xl shadow-[0_12px_40px_rgba(0,0,0,0.3)] transition-all duration-300 hover:w-[248px]">
+        <h2 className="mb-3 text-sm font-semibold tracking-wide text-zinc-100">Nodes</h2>
+        <div className="flex flex-col gap-2">
+          {sidebarItems.map((item) => (
+            <button
+              key={item.type}
+              type="button"
+              onClick={() => {
+                addNode(item.type);
+              }}
+              className="flex w-full items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-2.5 py-2 text-left text-zinc-100 transition-colors hover:border-cyan-300/30 hover:bg-white/15"
+            >
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/20 bg-white/5 text-cyan-100">
+                {item.icon}
+              </span>
+              <span className="pointer-events-none whitespace-nowrap text-sm text-zinc-200 opacity-0 transition-all duration-200 group-hover:translate-x-0 group-hover:opacity-100">
+                {item.label}
+              </span>
+            </button>
+          ))}
         </div>
       </aside>
 
-      <div className="absolute right-4 top-4 z-20 flex items-center gap-2">
-        <button
-          type="button"
-          className="rounded-xl border border-white/15 bg-black/55 px-3 py-2 text-xs font-medium text-zinc-200 backdrop-blur-xl transition-colors hover:bg-black/70"
-        >
-          Share
-        </button>
-        <button
-          type="button"
-          className="rounded-xl border border-white/15 bg-white/95 px-3 py-2 text-xs font-semibold text-zinc-900 transition-colors hover:bg-white"
-        >
-          Turn workflow into app
-        </button>
+      {/* Top Center - Workflow Management Card */}
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 w-full max-w-5xl px-4">
+        <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2.5 backdrop-blur-xl shadow-[0_12px_40px_rgba(0,0,0,0.3)]">
+          <div className="grid grid-cols-12 items-center gap-2">
+            <p className="col-span-2 text-xs font-semibold tracking-wide text-zinc-100">Workflow</p>
+
+            {/* Workflow ID Display */}
+            <div className="col-span-4">
+              <input
+                type="text"
+                value={workflowId}
+                onChange={(event) => setWorkflowId(event.target.value)}
+                placeholder="Workflow ID or new workflow"
+                className="h-9 w-full rounded-lg border border-white/10 bg-white/5 px-3 text-xs text-zinc-200 outline-none transition-all placeholder:text-zinc-500 focus:border-cyan-300/50 focus:bg-white/10"
+              />
+            </div>
+
+            {/* Save Button */}
+            <button
+              type="button"
+              onClick={() => void saveWorkflow()}
+              disabled={isSavingWorkflow}
+              className="col-span-2 h-9 rounded-lg border border-cyan-300/30 bg-cyan-400/15 px-2 text-xs font-semibold text-cyan-100 transition-all hover:bg-cyan-400/25 hover:border-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isSavingWorkflow ? "Saving..." : "Save"}
+            </button>
+
+            {/* Load Button */}
+            <button
+              type="button"
+              onClick={() => void loadWorkflow(workflowId)}
+              disabled={isLoadingWorkflow}
+              className="col-span-2 h-9 rounded-lg border border-white/10 bg-white/5 px-2 text-xs font-medium text-zinc-200 transition-all hover:bg-white/10 hover:border-white/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isLoadingWorkflow ? "Loading..." : "Load"}
+            </button>
+
+            {/* Share Button */}
+            <button
+              type="button"
+              className="col-span-1 h-9 rounded-lg border border-white/10 bg-white/5 px-2 text-xs font-medium text-zinc-200 transition-all hover:bg-white/10 hover:border-white/20"
+              title="Share workflow"
+            >
+              ↗
+            </button>
+
+            {/* Deploy Button */}
+            <button
+              type="button"
+              className="col-span-1 h-9 rounded-lg border border-white/10 bg-white/5 px-2 text-xs font-medium text-zinc-200 transition-all hover:bg-white/10 hover:border-white/20"
+              title="Deploy workflow"
+            >
+              ✓
+            </button>
+          </div>
+
+          {/* Status Message */}
+          {workflowMessage ? (
+            <p className="mt-2 text-[11px] text-cyan-300 font-mono">{workflowMessage}</p>
+          ) : null}
+        </div>
       </div>
 
       <ReactFlow
@@ -449,40 +766,42 @@ export default function FlowCanvas() {
           className="!rounded-xl !border !border-white/10 !bg-black/50 !backdrop-blur-xl"
         />
         <Panel position="bottom-center">
-          <div className="flex items-center gap-2 rounded-2xl border border-white/15 bg-black/45 px-3 py-2 backdrop-blur-xl shadow-[0_8px_30px_rgba(0,0,0,0.35)]">
+          <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 backdrop-blur-xl shadow-[0_8px_30px_rgba(0,0,0,0.3)]">
             <button
               type="button"
               onClick={() => void executeWorkflow()}
-              className="rounded-xl border border-white/20 bg-white/90 px-3 py-2 text-xs font-semibold text-zinc-900 transition-colors hover:bg-white"
+              className="rounded-lg border border-cyan-300/30 bg-cyan-400/15 px-3 py-2 text-xs font-semibold text-cyan-100 transition-all hover:bg-cyan-400/25 hover:border-cyan-300/50"
             >
               Run Workflow
             </button>
             <button
               type="button"
               onClick={() => void reactFlowInstanceRef.current?.zoomIn({ duration: 180 })}
-              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-100 transition-colors hover:bg-white/15"
+              className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-100 transition-all hover:bg-white/10"
             >
               +
             </button>
             <button
               type="button"
               onClick={() => void reactFlowInstanceRef.current?.zoomOut({ duration: 180 })}
-              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-100 transition-colors hover:bg-white/15"
+              className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-100 transition-all hover:bg-white/10"
             >
-              -
+              −
             </button>
             <button
               type="button"
               onClick={() =>
                 void reactFlowInstanceRef.current?.fitView({ duration: 220, padding: 0.6 })
               }
-              className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-zinc-100 transition-colors hover:bg-white/15"
+              className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-zinc-100 transition-all hover:bg-white/10"
             >
               Fit
             </button>
           </div>
         </Panel>
       </ReactFlow>
+
+      {workflowId && <HistorySidebar workflowId={workflowId} />}
     </div>
   );
 }
