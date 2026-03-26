@@ -110,6 +110,7 @@ function getNextNodeId(nodeList: Array<{ id: string }>) {
 export default function FlowCanvas() {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [workflowId, setWorkflowId] = useState("");
   const [workflowMessage, setWorkflowMessage] = useState("");
   const [isSavingWorkflow, setIsSavingWorkflow] = useState(false);
@@ -677,11 +678,18 @@ export default function FlowCanvas() {
         </div>
       </aside>
 
-      {/* Top Center - Workflow Management Card */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 w-full max-w-5xl px-4">
-        <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2.5 backdrop-blur-xl shadow-[0_12px_40px_rgba(0,0,0,0.3)]">
-          <div className="grid grid-cols-12 items-center gap-2">
-            <p className="col-span-2 text-xs font-semibold tracking-wide text-zinc-100">Workflow</p>
+      {/* Top Workflow Card - compact and collision-safe */}
+      <div
+        className="absolute left-1/2 top-4 z-20 -translate-x-1/2 transition-[width] duration-300"
+        style={{
+          width: isHistoryOpen
+            ? "min(760px, calc(100vw - 540px))"
+            : "min(800px, calc(100vw - 220px))",
+        }}
+      >
+        <div className="rounded-2xl border border-white/10 bg-white/5 px-2.5 py-2 backdrop-blur-xl shadow-[0_12px_40px_rgba(0,0,0,0.3)]">
+          <div className="grid grid-cols-12 items-center gap-1.5">
+            <p className="col-span-2 text-[11px] font-semibold tracking-wide text-zinc-100">Workflow</p>
 
             {/* Workflow ID Display */}
             <div className="col-span-4">
@@ -690,7 +698,7 @@ export default function FlowCanvas() {
                 value={workflowId}
                 onChange={(event) => setWorkflowId(event.target.value)}
                 placeholder="Workflow ID or new workflow"
-                className="h-9 w-full rounded-lg border border-white/10 bg-white/5 px-3 text-xs text-zinc-200 outline-none transition-all placeholder:text-zinc-500 focus:border-cyan-300/50 focus:bg-white/10"
+                className="h-7 w-full rounded-lg border border-white/10 bg-white/5 px-2.5 text-[11px] text-zinc-200 outline-none transition-all placeholder:text-zinc-500 focus:border-cyan-300/50 focus:bg-white/10"
               />
             </div>
 
@@ -699,7 +707,7 @@ export default function FlowCanvas() {
               type="button"
               onClick={() => void saveWorkflow()}
               disabled={isSavingWorkflow}
-              className="col-span-2 h-9 rounded-lg border border-cyan-300/30 bg-cyan-400/15 px-2 text-xs font-semibold text-cyan-100 transition-all hover:bg-cyan-400/25 hover:border-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="col-span-2 h-7 rounded-lg border border-cyan-300/30 bg-cyan-400/15 px-1.5 text-[11px] font-semibold text-cyan-100 transition-all hover:bg-cyan-400/25 hover:border-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSavingWorkflow ? "Saving..." : "Save"}
             </button>
@@ -709,7 +717,7 @@ export default function FlowCanvas() {
               type="button"
               onClick={() => void loadWorkflow(workflowId)}
               disabled={isLoadingWorkflow}
-              className="col-span-2 h-9 rounded-lg border border-white/10 bg-white/5 px-2 text-xs font-medium text-zinc-200 transition-all hover:bg-white/10 hover:border-white/20 disabled:cursor-not-allowed disabled:opacity-50"
+              className="col-span-2 h-7 rounded-lg border border-white/10 bg-white/5 px-1.5 text-[11px] font-medium text-zinc-200 transition-all hover:bg-white/10 hover:border-white/20 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isLoadingWorkflow ? "Loading..." : "Load"}
             </button>
@@ -717,7 +725,7 @@ export default function FlowCanvas() {
             {/* Share Button */}
             <button
               type="button"
-              className="col-span-1 h-9 rounded-lg border border-white/10 bg-white/5 px-2 text-xs font-medium text-zinc-200 transition-all hover:bg-white/10 hover:border-white/20"
+              className="col-span-1 h-7 rounded-lg border border-white/10 bg-white/5 px-1.5 text-[11px] font-medium text-zinc-200 transition-all hover:bg-white/10 hover:border-white/20"
               title="Share workflow"
             >
               ↗
@@ -726,7 +734,7 @@ export default function FlowCanvas() {
             {/* Deploy Button */}
             <button
               type="button"
-              className="col-span-1 h-9 rounded-lg border border-white/10 bg-white/5 px-2 text-xs font-medium text-zinc-200 transition-all hover:bg-white/10 hover:border-white/20"
+              className="col-span-1 h-7 rounded-lg border border-white/10 bg-white/5 px-1.5 text-[11px] font-medium text-zinc-200 transition-all hover:bg-white/10 hover:border-white/20"
               title="Deploy workflow"
             >
               ✓
@@ -746,6 +754,8 @@ export default function FlowCanvas() {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        zoomOnScroll
+        noWheelClassName="nowheel"
         onInit={(instance) => {
           reactFlowInstanceRef.current = instance;
         }}
@@ -801,7 +811,11 @@ export default function FlowCanvas() {
         </Panel>
       </ReactFlow>
 
-      {workflowId && <HistorySidebar workflowId={workflowId} />}
+      <HistorySidebar
+        workflowId={workflowId}
+        isOpen={isHistoryOpen}
+        onToggle={() => setIsHistoryOpen((currentValue) => !currentValue)}
+      />
     </div>
   );
 }

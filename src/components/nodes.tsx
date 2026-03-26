@@ -50,7 +50,7 @@ function BaseNodeCard({ nodeId, title, placeholder, data, selected, children }: 
 
   return (
     <div
-      className={`relative min-w-[290px] rounded-2xl border bg-[#111319]/90 p-4 shadow-[0_10px_35px_rgba(0,0,0,0.45)] backdrop-blur-xl transition-all ${statusClassMap[status]} ${
+      className={`nowheel relative w-[360px] max-w-[360px] overflow-hidden rounded-2xl border bg-[#111319]/90 p-4 shadow-[0_10px_35px_rgba(0,0,0,0.45)] backdrop-blur-xl transition-all ${statusClassMap[status]} ${
         selected
           ? "border-cyan-300/95 shadow-[0_0_0_1px_rgba(103,232,249,0.45),0_0_28px_rgba(34,211,238,0.65)]"
           : ""
@@ -131,7 +131,7 @@ function BaseNodeCard({ nodeId, title, placeholder, data, selected, children }: 
       </div>
       <div className="mt-3 border-t border-white/10 pt-2">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-300">Output</p>
-        <div className="mt-1 max-h-24 overflow-auto rounded-lg border border-white/10 bg-black/30 px-2 py-2 text-[11px] text-zinc-400">
+        <div className="output-scroll mt-1 max-h-36 min-h-16 overflow-y-auto overflow-x-hidden rounded-lg border border-white/10 bg-black/30 px-2 py-2 text-[11px] leading-relaxed text-zinc-400 whitespace-pre-wrap break-words">
           {outputText}
         </div>
       </div>

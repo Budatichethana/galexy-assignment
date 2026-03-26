@@ -42,3 +42,25 @@ body {
 .react-flow__minimap-mask {
   fill: rgba(255, 255, 255, 0.08);
 }
+
+.output-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.55) transparent;
+}
+
+.output-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.output-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.output-scroll::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background: rgba(148, 163, 184, 0.55);
+}
+
+.output-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.75);
+}

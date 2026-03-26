@@ -28,6 +28,8 @@ interface WorkflowRun {
 
 interface HistorySidebarProps {
   workflowId: string;
+  isOpen: boolean;
+  onToggle: () => void;
 }
 
 function calculateDuration(start: string, end?: string): string {
@@ -40,7 +42,7 @@ function calculateDuration(start: string, end?: string): string {
   return `${(duration / 60).toFixed(1)}m`;
 }
 
-export function HistorySidebar({ workflowId }: HistorySidebarProps) {
+export function HistorySidebar({ workflowId, isOpen, onToggle }: HistorySidebarProps) {
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [selectedRun, setSelectedRun] = useState<WorkflowRun | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -100,7 +102,29 @@ export function HistorySidebar({ workflowId }: HistorySidebarProps) {
   }, [selectedRun?.id]);
 
   return (
-    <div className="fixed right-0 top-0 h-screen w-96 bg-white/5 border-l border-white/10 backdrop-blur-xl flex flex-col shadow-2xl">
+    <div
+      className="fixed right-0 top-0 z-30 h-screen w-96 border-l border-white/10 bg-white/5 backdrop-blur-xl shadow-2xl transition-transform duration-300"
+      style={{
+        transform: isOpen ? "translateX(0)" : "translateX(calc(100% - 18px))",
+      }}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        className="absolute left-0 top-1/2 z-40 flex h-10 w-10 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/15 bg-zinc-900/80 text-zinc-200 shadow-[0_8px_24px_rgba(0,0,0,0.45)] transition-colors hover:bg-zinc-800"
+        aria-label={isOpen ? "Close history sidebar" : "Open history sidebar"}
+        title={isOpen ? "Close history" : "Open history"}
+      >
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+          {isOpen ? (
+            <path d="M7.5 4.5L13 10l-5.5 5.5" />
+          ) : (
+            <path d="M12.5 4.5L7 10l5.5 5.5" />
+          )}
+        </svg>
+      </button>
+
+      <div className="flex h-full flex-col">
       {/* Header */}
       <div className="border-b border-white/10 px-4 py-4">
         <h2 className="text-sm font-semibold tracking-wide text-zinc-100">
@@ -213,6 +237,7 @@ export function HistorySidebar({ workflowId }: HistorySidebarProps) {
             </div>
           </div>
         )}
+      </div>
       </div>
     </div>
   );
