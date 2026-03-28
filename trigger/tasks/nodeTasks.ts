@@ -5,6 +5,33 @@ import {
   type NodeTaskOutput,
 } from "../../src/lib/triggerTasks";
 
+function toAbsoluteImageUrl(imageUrl: string): string | null {
+  const trimmed = imageUrl.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return trimmed;
+  }
+
+  // Resolve local relative URLs when app base URL is available.
+  const appBaseUrl =
+    process.env.NEXT_PUBLIC_APP_URL
+    || process.env.APP_BASE_URL
+    || process.env.VERCEL_URL;
+
+  if (!appBaseUrl) {
+    return null;
+  }
+
+  const normalizedBase = appBaseUrl.startsWith("http")
+    ? appBaseUrl
+    : `https://${appBaseUrl}`;
+
+  return new URL(trimmed, normalizedBase).toString();
+}
+
 function buildBaseInput(payload: NodeExecutionPayload) {
   const combinedInputs = [
     ...payload.chainedInputs,
@@ -25,16 +52,26 @@ export const textNodeTask = task({
 export const imageNodeTask = task({
   id: NODE_TASK_IDS.image,
   run: async (payload: NodeExecutionPayload): Promise<NodeTaskOutput> => {
-    const input = buildBaseInput(payload);
-    return { output: `Image mock processed: ${input}` };
+    const imageUrl = payload.images?.[0]?.trim() || payload.manualInput?.trim();
+
+    if (!imageUrl) {
+      throw new Error("Image node requires an uploaded image URL");
+    }
+
+    return { output: imageUrl };
   },
 });
 
 export const videoNodeTask = task({
   id: NODE_TASK_IDS.video,
   run: async (payload: NodeExecutionPayload): Promise<NodeTaskOutput> => {
-    const input = buildBaseInput(payload);
-    return { output: `Video mock processed: ${input}` };
+    const videoUrl = payload.video?.trim() || payload.manualInput?.trim();
+
+    if (!videoUrl) {
+      throw new Error("Video node requires an uploaded video URL");
+    }
+
+    return { output: videoUrl };
   },
 });
 
@@ -58,17 +95,41 @@ export const llmNodeTask = task({
   id: NODE_TASK_IDS.llm,
   run: async (payload: NodeExecutionPayload): Promise<NodeTaskOutput> => {
     const apiKey = process.env.GROQ_API_KEY;
-    const model = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+    const textModel = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+    const visionModel = process.env.GROQ_VISION_MODEL || textModel;
 
     const chainedText = payload.chainedInputs.join("\n");
     const userPrompt = payload.userMessage?.trim() || payload.manualInput?.trim() || chainedText || "Give a concise response";
     const systemPrompt = payload.systemPrompt?.trim() || "You are a helpful assistant.";
+    const imageUrls = (payload.images ?? [])
+      .map(toAbsoluteImageUrl)
+      .filter((value): value is string => Boolean(value));
+    const hasImages = imageUrls.length > 0;
 
     if (!apiKey) {
       return {
-        output: `LLM mock response: ${userPrompt}`,
+        output: hasImages
+          ? `LLM mock multimodal response: ${userPrompt}`
+          : `LLM mock response: ${userPrompt}`,
       };
     }
+
+    const textContent = [
+      chainedText ? `Upstream Inputs:\n${chainedText}` : "",
+      `Prompt:\n${userPrompt}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
+    const userMessageContent = hasImages
+      ? [
+          { type: "text", text: textContent },
+          ...imageUrls.map((url) => ({
+            type: "image_url",
+            image_url: { url },
+          })),
+        ]
+      : textContent;
 
     const response = await fetch(
       "https://api.groq.com/openai/v1/chat/completions",
@@ -79,7 +140,7 @@ export const llmNodeTask = task({
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model,
+          model: hasImages ? visionModel : textModel,
           temperature: 0.2,
           messages: [
             {
@@ -88,12 +149,7 @@ export const llmNodeTask = task({
             },
             {
               role: "user",
-              content: [
-                chainedText ? `Upstream Inputs:\n${chainedText}` : "",
-                `Prompt:\n${userPrompt}`,
-              ]
-                .filter(Boolean)
-                .join("\n\n"),
+              content: userMessageContent,
             },
           ],
         }),

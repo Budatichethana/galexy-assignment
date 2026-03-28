@@ -7,8 +7,9 @@ import {
 export async function POST(request: Request) {
   try {
     const { userId } = await auth();
+    console.log("Auth userId:", userId);
     if (!userId) {
-      return new Response("Unauthorized", { status: 401 });
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const body = (await request.json()) as {

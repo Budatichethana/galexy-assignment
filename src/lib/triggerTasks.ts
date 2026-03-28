@@ -15,6 +15,7 @@ export type NodeExecutionPayload = {
   systemPrompt?: string;
   userMessage?: string;
   images?: string[];
+  video?: string;
 };
 
 export type NodeTaskOutput = {

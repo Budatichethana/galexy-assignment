@@ -2,12 +2,13 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 
 const isBuilderRoute = createRouteMatcher(["/builder(.*)"]);
+const isNodeRoute = createRouteMatcher(["/node(.*)"]);
 const isApiRoute = createRouteMatcher(["/api(.*)", "/trpc(.*)"]);
 
 const authProxy = clerkMiddleware(async (auth, req) => {
   console.log("PROXY.TS running for:", req.url);
-  if (isBuilderRoute(req)) {
-    console.log("Matched /builder route!");
+  if (isBuilderRoute(req) || isNodeRoute(req)) {
+    console.log("Matched protected app route!");
     const { userId, redirectToSignIn } = await auth();
 
     if (!userId) {
@@ -33,5 +34,12 @@ export const proxy = authProxy;
 export default authProxy;
 
 export const config = {
-  matcher: ["/builder", "/builder/:path*", "/api/:path*", "/trpc/:path*"],
+  matcher: [
+    "/builder",
+    "/builder/:path*",
+    "/node",
+    "/node/:path*",
+    "/api/:path*",
+    "/trpc/:path*",
+  ],
 };

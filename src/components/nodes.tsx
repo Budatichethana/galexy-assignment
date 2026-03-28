@@ -1,15 +1,25 @@
-import type { ReactNode } from "react";
+import { useRef, useState, type DragEvent, type ReactNode } from "react";
 import { Handle, Position, type NodeProps } from "reactflow";
 
 export type NodeType = "text" | "image" | "video" | "llm" | "crop" | "frame";
 
 export type NodeStatus = "idle" | "running" | "success" | "failed";
 
+export type InputHandleId =
+  | "system_prompt"
+  | "user_message"
+  | "images"
+  | "video"
+  | "image";
+
+export type ConnectedHandleMap = Partial<Record<InputHandleId, boolean>>;
+
 export type NodeData = {
   label?: string;
   output?: string;
   status?: NodeStatus;
   isInputConnected?: boolean;
+  connectedHandles?: ConnectedHandleMap;
   manualInput?: string;
   systemPrompt?: string;
   userMessage?: string;
@@ -17,6 +27,8 @@ export type NodeData = {
   onManualInputChange?: (nodeId: string, value: string) => void;
   onSystemPromptChange?: (nodeId: string, value: string) => void;
   onUserMessageChange?: (nodeId: string, value: string) => void;
+  onImageUpload?: (nodeId: string, file: File) => Promise<void>;
+  onVideoUpload?: (nodeId: string, file: File) => Promise<void>;
   onRunSingle?: (nodeId: string) => Promise<void>;
   onRunPartial?: (nodeId: string) => Promise<void>;
   onDeleteNode?: (nodeId: string) => void;
@@ -28,11 +40,25 @@ type BaseNodeCardProps = {
   placeholder: string;
   data?: NodeData;
   selected?: boolean;
+  targetHandles?: Array<{ id: InputHandleId; top: string }>;
+  sourceHandles?: Array<{ id: string; top: string }>;
   children?: ReactNode;
 };
 
-function BaseNodeCard({ nodeId, title, placeholder, data, selected, children }: BaseNodeCardProps) {
-  const isInputConnected = Boolean(data?.isInputConnected);
+function BaseNodeCard({
+  nodeId,
+  title,
+  placeholder,
+  data,
+  selected,
+  targetHandles = [],
+  sourceHandles = [],
+  children,
+}: BaseNodeCardProps) {
+  const connectedHandles = data?.connectedHandles ?? {};
+  const hasConnectedInput = targetHandles.some(
+    (handle) => Boolean(connectedHandles[handle.id]),
+  );
   const status = data?.status ?? "idle";
   const outputText = data?.output?.trim() ? data.output : "No output yet";
   const statusLabelMap: Record<NodeStatus, string> = {
@@ -81,11 +107,15 @@ function BaseNodeCard({ nodeId, title, placeholder, data, selected, children }: 
           <path d="M14 11v6" />
         </svg>
       </button>
-      <Handle
-        type="target"
-        position={Position.Left}
-        style={{ top: "50%", transform: "translateY(-50%)" }}
-      />
+      {targetHandles.map((handle) => (
+        <Handle
+          key={`target-${handle.id}`}
+          id={handle.id}
+          type="target"
+          position={Position.Left}
+          style={{ top: handle.top, transform: "translateY(-50%)" }}
+        />
+      ))}
       <div className="flex items-start justify-between gap-2">
         <h3 className="text-[15px] font-semibold text-zinc-100">{title}</h3>
         <span
@@ -105,14 +135,14 @@ function BaseNodeCard({ nodeId, title, placeholder, data, selected, children }: 
       <p className="mt-1 text-xs text-zinc-400">{placeholder}</p>
       {data?.label ? <p className="mt-2 text-xs text-zinc-500">{data.label}</p> : null}
       <p className="mt-2 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-zinc-300">
-        Input: {isInputConnected ? "Connected" : "Manual"}
+        Input: {hasConnectedInput ? "Connected" : "Manual"}
       </p>
-      {isInputConnected ? (
+      {hasConnectedInput ? (
         <p className="mt-2 rounded-md border border-sky-300/20 bg-sky-500/10 px-2 py-1 text-[11px] text-sky-200">
           Using connected input
         </p>
       ) : null}
-      <div className={isInputConnected ? "pointer-events-none" : ""}>{children}</div>
+      <div>{children}</div>
       <div className="mt-3 flex items-center gap-2">
         <button
           type="button"
@@ -135,18 +165,20 @@ function BaseNodeCard({ nodeId, title, placeholder, data, selected, children }: 
           {outputText}
         </div>
       </div>
-      <Handle
-        type="source"
-        position={Position.Right}
-        style={{ top: "50%", transform: "translateY(-50%)" }}
-      />
+      {sourceHandles.map((handle) => (
+        <Handle
+          key={`source-${handle.id}`}
+          id={handle.id}
+          type="source"
+          position={Position.Right}
+          style={{ top: handle.top, transform: "translateY(-50%)" }}
+        />
+      ))}
     </div>
   );
 }
 
 export function TextNode({ id, data, selected }: NodeProps<NodeData>) {
-  const isInputConnected = Boolean(data?.isInputConnected);
-
   return (
     <BaseNodeCard
       nodeId={id}
@@ -154,20 +186,44 @@ export function TextNode({ id, data, selected }: NodeProps<NodeData>) {
       placeholder="Placeholder: text prompt"
       data={data}
       selected={selected}
+      sourceHandles={[{ id: "output", top: "50%" }]}
     >
       <textarea
         className="mt-2 h-20 w-full resize-none rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs text-zinc-200 outline-none transition-colors placeholder:text-zinc-500 focus:border-sky-300/60 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-zinc-500 disabled:opacity-70"
         placeholder="Write text..."
         value={data?.manualInput ?? ""}
         onChange={(event) => data?.onManualInputChange?.(id, event.target.value)}
-        disabled={isInputConnected}
+        disabled={false}
       />
     </BaseNodeCard>
   );
 }
 
 export function ImageNode({ id, data, selected }: NodeProps<NodeData>) {
-  const isInputConnected = Boolean(data?.isInputConnected);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const imageUrl = data?.output?.trim() || data?.manualInput?.trim() || "";
+
+  const handleFiles = async (files: FileList | null) => {
+    const file = files?.[0];
+    if (!file || !data?.onImageUpload) {
+      return;
+    }
+
+    setIsUploading(true);
+    try {
+      await data.onImageUpload(id, file);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const onDrop = async (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragging(false);
+    await handleFiles(event.dataTransfer.files);
+  };
 
   return (
     <BaseNodeCard
@@ -176,20 +232,72 @@ export function ImageNode({ id, data, selected }: NodeProps<NodeData>) {
       placeholder="Placeholder: image upload"
       data={data}
       selected={selected}
+      sourceHandles={[{ id: "image", top: "50%" }]}
     >
       <input
-        className="mt-2 w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs text-zinc-200 outline-none transition-colors placeholder:text-zinc-500 focus:border-sky-300/60 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-zinc-500 disabled:opacity-70"
-        placeholder="Image URL"
-        value={data?.manualInput ?? ""}
-        onChange={(event) => data?.onManualInputChange?.(id, event.target.value)}
-        disabled={isInputConnected}
+        ref={fileInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/gif"
+        className="hidden"
+        onChange={(event) => void handleFiles(event.target.files)}
+        disabled={isUploading}
       />
+      <div
+        className={`mt-2 rounded-lg border border-dashed px-3 py-3 text-xs transition-colors ${
+          isDragging
+            ? "border-cyan-300/70 bg-cyan-500/10 text-cyan-100"
+            : "border-white/15 bg-black/20 text-zinc-300"
+        }`}
+        onDragOver={(event) => {
+          event.preventDefault();
+          setIsDragging(true);
+        }}
+        onDragLeave={() => setIsDragging(false)}
+        onDrop={(event) => {
+          void onDrop(event);
+        }}
+      >
+        <p className="text-[11px]">
+          {isUploading
+            ? "Uploading image..."
+            : "Drag & drop image here, or click to upload"}
+        </p>
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isUploading}
+          className="mt-2 rounded-md border border-white/15 bg-white/10 px-2 py-1 text-[11px] text-zinc-200 transition-colors hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Choose Image
+        </button>
+      </div>
+      {imageUrl ? (
+        <div className="mt-2 overflow-hidden rounded-lg border border-white/10 bg-black/20">
+          <img src={imageUrl} alt="Uploaded preview" className="h-28 w-full object-cover" />
+        </div>
+      ) : null}
     </BaseNodeCard>
   );
 }
 
 export function VideoNode({ id, data, selected }: NodeProps<NodeData>) {
-  const isInputConnected = Boolean(data?.isInputConnected);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const videoUrl = data?.output?.trim() || data?.manualInput?.trim() || "";
+
+  const handleFiles = async (files: FileList | null) => {
+    const file = files?.[0];
+    if (!file || !data?.onVideoUpload) {
+      return;
+    }
+
+    setIsUploading(true);
+    try {
+      await data.onVideoUpload(id, file);
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   return (
     <BaseNodeCard
@@ -198,20 +306,45 @@ export function VideoNode({ id, data, selected }: NodeProps<NodeData>) {
       placeholder="Placeholder: video upload"
       data={data}
       selected={selected}
+      sourceHandles={[{ id: "video", top: "50%" }]}
     >
       <input
-        className="mt-2 w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs text-zinc-200 outline-none transition-colors placeholder:text-zinc-500 focus:border-sky-300/60 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-zinc-500 disabled:opacity-70"
-        placeholder="Video URL"
-        value={data?.manualInput ?? ""}
-        onChange={(event) => data?.onManualInputChange?.(id, event.target.value)}
-        disabled={isInputConnected}
+        ref={fileInputRef}
+        type="file"
+        accept="video/mp4,video/quicktime,video/webm"
+        className="hidden"
+        onChange={(event) => void handleFiles(event.target.files)}
+        disabled={isUploading}
       />
+      <div className="mt-2 rounded-lg border border-dashed border-white/15 bg-black/20 px-3 py-3 text-xs text-zinc-300">
+        <p className="text-[11px]">
+          {isUploading ? "Uploading video..." : "Upload MP4, MOV, or WEBM"}
+        </p>
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isUploading}
+          className="mt-2 rounded-md border border-white/15 bg-white/10 px-2 py-1 text-[11px] text-zinc-200 transition-colors hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Choose Video
+        </button>
+      </div>
+      {videoUrl ? (
+        <div className="mt-2 overflow-hidden rounded-lg border border-white/10 bg-black/20 p-1">
+          <video
+            src={videoUrl}
+            controls
+            className="h-28 w-full rounded object-cover"
+            preload="metadata"
+          />
+        </div>
+      ) : null}
     </BaseNodeCard>
   );
 }
 
 export function LLMNode({ id, data, selected }: NodeProps<NodeData>) {
-  const isInputConnected = Boolean(data?.isInputConnected);
+  const connectedHandles = data?.connectedHandles ?? {};
 
   return (
     <BaseNodeCard
@@ -220,28 +353,37 @@ export function LLMNode({ id, data, selected }: NodeProps<NodeData>) {
       placeholder="Placeholder: model settings"
       data={data}
       selected={selected}
+      targetHandles={[
+        { id: "system_prompt", top: "28%" },
+        { id: "user_message", top: "50%" },
+        { id: "images", top: "72%" },
+      ]}
+      sourceHandles={[{ id: "output", top: "50%" }]}
     >
       <textarea
         className="mt-2 h-16 w-full resize-none rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs text-zinc-200 outline-none transition-colors placeholder:text-zinc-500 focus:border-sky-300/60 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-zinc-500 disabled:opacity-70"
         placeholder="System prompt"
         value={data?.systemPrompt ?? ""}
         onChange={(event) => data?.onSystemPromptChange?.(id, event.target.value)}
-        disabled={isInputConnected}
+        disabled={Boolean(connectedHandles.system_prompt)}
       />
       <textarea
         className="mt-2 h-16 w-full resize-none rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs text-zinc-200 outline-none transition-colors placeholder:text-zinc-500 focus:border-sky-300/60 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-zinc-500 disabled:opacity-70"
         placeholder="User message"
         value={data?.userMessage ?? ""}
         onChange={(event) => data?.onUserMessageChange?.(id, event.target.value)}
-        disabled={isInputConnected}
+        disabled={Boolean(connectedHandles.user_message)}
       />
+      {connectedHandles.images ? (
+        <p className="mt-2 rounded-md border border-cyan-300/20 bg-cyan-500/10 px-2 py-1 text-[11px] text-cyan-100">
+          Images input connected
+        </p>
+      ) : null}
     </BaseNodeCard>
   );
 }
 
 export function CropNode({ id, data, selected }: NodeProps<NodeData>) {
-  const isInputConnected = Boolean(data?.isInputConnected);
-
   return (
     <BaseNodeCard
       nodeId={id}
@@ -249,21 +391,21 @@ export function CropNode({ id, data, selected }: NodeProps<NodeData>) {
       placeholder="Placeholder: crop settings"
       data={data}
       selected={selected}
+      targetHandles={[{ id: "image", top: "50%" }]}
+      sourceHandles={[{ id: "image", top: "50%" }]}
     >
       <input
         className="mt-2 w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs text-zinc-200 outline-none transition-colors placeholder:text-zinc-500 focus:border-sky-300/60 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-zinc-500 disabled:opacity-70"
         placeholder="Crop region"
         value={data?.manualInput ?? ""}
         onChange={(event) => data?.onManualInputChange?.(id, event.target.value)}
-        disabled={isInputConnected}
+        disabled={false}
       />
     </BaseNodeCard>
   );
 }
 
 export function FrameNode({ id, data, selected }: NodeProps<NodeData>) {
-  const isInputConnected = Boolean(data?.isInputConnected);
-
   return (
     <BaseNodeCard
       nodeId={id}
@@ -271,13 +413,15 @@ export function FrameNode({ id, data, selected }: NodeProps<NodeData>) {
       placeholder="Placeholder: frame extraction"
       data={data}
       selected={selected}
+      targetHandles={[{ id: "video", top: "50%" }]}
+      sourceHandles={[{ id: "image", top: "50%" }]}
     >
       <input
         className="mt-2 w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs text-zinc-200 outline-none transition-colors placeholder:text-zinc-500 focus:border-sky-300/60 disabled:cursor-not-allowed disabled:bg-white/5 disabled:text-zinc-500 disabled:opacity-70"
         placeholder="Frame index"
         value={data?.manualInput ?? ""}
         onChange={(event) => data?.onManualInputChange?.(id, event.target.value)}
-        disabled={isInputConnected}
+        disabled={false}
       />
     </BaseNodeCard>
   );

@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Geist, Geist_Mono } from "next/font/google";
-import { AuthControls } from "@/components/AuthControls";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -31,9 +30,6 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <ClerkProvider>
-          <header className="fixed right-4 top-4 z-50">
-            <AuthControls />
-          </header>
           {children}
         </ClerkProvider>
       </body>

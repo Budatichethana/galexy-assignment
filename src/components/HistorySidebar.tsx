@@ -30,6 +30,7 @@ interface HistorySidebarProps {
   workflowId: string;
   isOpen: boolean;
   onToggle: () => void;
+  refreshKey?: number;
 }
 
 function calculateDuration(start: string, end?: string): string {
@@ -42,7 +43,7 @@ function calculateDuration(start: string, end?: string): string {
   return `${(duration / 60).toFixed(1)}m`;
 }
 
-export function HistorySidebar({ workflowId, isOpen, onToggle }: HistorySidebarProps) {
+export function HistorySidebar({ workflowId, isOpen, onToggle, refreshKey = 0 }: HistorySidebarProps) {
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [selectedRun, setSelectedRun] = useState<WorkflowRun | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -74,7 +75,7 @@ export function HistorySidebar({ workflowId, isOpen, onToggle }: HistorySidebarP
     };
 
     fetchRuns();
-  }, [workflowId]);
+  }, [workflowId, refreshKey]);
 
   // Fetch run details when selected run changes
   useEffect(() => {

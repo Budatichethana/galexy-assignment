@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import ReactFlow, {
   addEdge,
   Background,
@@ -9,7 +10,6 @@ import ReactFlow, {
   type Edge,
   MiniMap,
   type Node,
-  Panel,
   type ReactFlowInstance,
   useEdgesState,
   useNodesState,
@@ -17,11 +17,16 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 import {
   nodeTypes,
+  type ConnectedHandleMap,
+  type InputHandleId,
   type NodeData,
   type NodeStatus,
   type NodeType,
 } from "@/components/nodes";
 import { HistorySidebar } from "@/components/HistorySidebar";
+import { hasDirectedCycle } from "@/lib/dagCycle";
+import { isConnectionTypeCompatible } from "@/lib/nodeDataTypes";
+import { getWorkflowTemplateById } from "@/lib/workflowTemplates";
 
 const sidebarItems = [
   { label: "Text", type: "text" as const },
@@ -72,31 +77,95 @@ const sidebarItems = [
     ),
 }));
 
-const initialNodes: Node<NodeData, NodeType>[] = [
-  {
-    id: "1",
-    type: "text",
-    position: { x: 120, y: 140 },
-    data: { label: "Node 1", status: "idle" },
-  },
-  {
-    id: "2",
-    type: "llm",
-    position: { x: 560, y: 240 },
-    data: { label: "Node 2", status: "idle" },
-  },
-];
-
-const initialEdges: Edge[] = [
-  {
-    id: "e1-2",
-    source: "1",
-    target: "2",
-    animated: true,
-  },
-];
+const emptyNodes: Node<NodeData, NodeType>[] = [];
+const emptyEdges: Edge[] = [];
 
 const WORKFLOW_ID_STORAGE_KEY = "nextflow:workflowId";
+
+type CropConfig = {
+  xPercent: number;
+  yPercent: number;
+  widthPercent: number;
+  heightPercent: number;
+};
+
+type NodeExecutionInputs = {
+  chainedInputs: string[];
+  systemPrompt?: string;
+  userMessage?: string;
+  images?: string[];
+  video?: string;
+  cropConfig?: CropConfig;
+  timestamp?: number | `${number}%`;
+  manualInput?: string;
+  label?: string;
+};
+
+function parseCropConfig(value: string | undefined): CropConfig | undefined {
+  if (!value?.trim()) {
+    return undefined;
+  }
+
+  const normalized = value.trim();
+
+  // Accept comma-separated format like x=10,y=10,w=80,h=80.
+  const parts = normalized.split(",").map((part) => part.trim());
+  const values: Record<string, number> = {};
+
+  for (const part of parts) {
+    const [key, raw] = part.split("=").map((item) => item.trim());
+    if (!key || !raw) {
+      continue;
+    }
+
+    const numeric = Number.parseFloat(raw.replace("%", ""));
+    if (!Number.isFinite(numeric)) {
+      continue;
+    }
+
+    values[key.toLowerCase()] = numeric;
+  }
+
+  const xPercent = values.x;
+  const yPercent = values.y;
+  const widthPercent = values.w ?? values.width;
+  const heightPercent = values.h ?? values.height;
+
+  if (
+    xPercent === undefined
+    || yPercent === undefined
+    || widthPercent === undefined
+    || heightPercent === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    xPercent,
+    yPercent,
+    widthPercent,
+    heightPercent,
+  };
+}
+
+function parseTimestamp(value: string | undefined): number | `${number}%` | undefined {
+  if (!value?.trim()) {
+    return undefined;
+  }
+
+  const normalized = value.trim();
+
+  if (/^[0-9]+(?:\.[0-9]+)?%$/.test(normalized)) {
+    return normalized as `${number}%`;
+  }
+
+  const numeric = Number.parseFloat(normalized);
+  if (Number.isFinite(numeric) && numeric >= 0) {
+    return numeric;
+  }
+
+  return undefined;
+}
 
 function getNextNodeId(nodeList: Array<{ id: string }>) {
   const maxNumericId = nodeList.reduce((maxValue, node) => {
@@ -108,17 +177,24 @@ function getNextNodeId(nodeList: Array<{ id: string }>) {
 }
 
 export default function FlowCanvas() {
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [workflowId, setWorkflowId] = useState("");
-  const [workflowMessage, setWorkflowMessage] = useState("");
+  const [workflowName, setWorkflowName] = useState("Untitled Workflow");
+  const [, setWorkflowMessage] = useState("");
+  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [isSavingWorkflow, setIsSavingWorkflow] = useState(false);
   const [isLoadingWorkflow, setIsLoadingWorkflow] = useState(false);
-  const nextNodeId = useRef(3);
+  const nextNodeId = useRef(1);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   const reactFlowInstanceRef = useRef<ReactFlowInstance | null>(null);
+  const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isAutoSaveSuspendedRef = useRef(true);
+  const lastSavedSnapshotRef = useRef("");
   
   // Execution tracking
   const currentRunIdRef = useRef<string | null>(null);
@@ -131,6 +207,16 @@ export default function FlowCanvas() {
   useEffect(() => {
     edgesRef.current = edges;
   }, [edges]);
+
+  const getWorkflowSnapshot = useCallback(
+    (currentNodes: Node<NodeData, NodeType>[], currentEdges: Edge[], currentName: string) =>
+      JSON.stringify({
+        nodes: currentNodes,
+        edges: currentEdges,
+        name: currentName.trim() || "Untitled Workflow",
+      }),
+    [],
+  );
 
   const setNodeStatus = useCallback(
     (nodeId: string, status: NodeStatus) => {
@@ -191,21 +277,139 @@ export default function FlowCanvas() {
     [setNodeField],
   );
 
-  const getNodeInputs = useCallback(
+  const uploadAsset = useCallback(async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const response = await fetch("/api/upload", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error("Upload failed");
+    }
+
+    const result = (await response.json()) as { url?: string };
+    if (!result.url) {
+      throw new Error("Upload URL missing");
+    }
+
+    return result.url;
+  }, []);
+
+  const handleImageUpload = useCallback(
+    async (nodeId: string, file: File) => {
+      const url = await uploadAsset(file);
+      setNodeField(nodeId, {
+        manualInput: url,
+        output: url,
+      });
+    },
+    [setNodeField, uploadAsset],
+  );
+
+  const handleVideoUpload = useCallback(
+    async (nodeId: string, file: File) => {
+      const url = await uploadAsset(file);
+      setNodeField(nodeId, {
+        manualInput: url,
+        output: url,
+      });
+    },
+    [setNodeField, uploadAsset],
+  );
+
+  const getNodeExecutionInputs = useCallback(
     (
       nodeId: string,
       nodeList: Node<NodeData>[] = nodesRef.current,
       edgeList: Edge[] = edgesRef.current,
     ) => {
-      return edgeList
-        .filter((edge) => edge.target === nodeId)
-        .map((edge) => {
-          const sourceNode = nodeList.find((node) => node.id === edge.source);
-          return sourceNode?.data.output?.trim();
-        })
-        .filter((output): output is string => Boolean(output));
+      const targetNode = nodeList.find((node) => node.id === nodeId);
+      const textInputs: string[] = [];
+      const imageInputs: string[] = [];
+      const videoInputs: string[] = [];
+      const systemPromptInputs: string[] = [];
+      const userMessageInputs: string[] = [];
+
+      const incomingEdges = edgeList.filter((edge) => edge.target === nodeId);
+
+      for (const edge of incomingEdges) {
+        const sourceNode = nodeList.find((node) => node.id === edge.source);
+        const output = sourceNode?.data.output?.trim();
+
+        if (!sourceNode || !output) {
+          continue;
+        }
+
+        if (edge.targetHandle === "system_prompt") {
+          systemPromptInputs.push(output);
+          continue;
+        }
+
+        if (edge.targetHandle === "user_message") {
+          userMessageInputs.push(output);
+          continue;
+        }
+
+        if (edge.targetHandle === "images" || edge.targetHandle === "image") {
+          imageInputs.push(output);
+          continue;
+        }
+
+        if (edge.targetHandle === "video") {
+          videoInputs.push(output);
+          continue;
+        }
+
+        // Strict handle mapping: ignore edges without a supported targetHandle.
+      }
+
+      const manualInput = targetNode?.data.manualInput?.trim();
+      const defaultUserMessage = targetNode?.data.userMessage?.trim();
+      const defaultSystemPrompt = targetNode?.data.systemPrompt?.trim();
+
+      const chainedInputs = [...textInputs];
+
+      if (targetNode?.type === "text" && manualInput) {
+        chainedInputs.push(manualInput);
+      }
+
+      return {
+        chainedInputs,
+        systemPrompt: systemPromptInputs[0] || defaultSystemPrompt,
+        userMessage: userMessageInputs[0] || defaultUserMessage,
+        images: imageInputs.length > 0 ? imageInputs : undefined,
+        video: videoInputs[0],
+        cropConfig: parseCropConfig(targetNode?.data.manualInput),
+        timestamp: parseTimestamp(targetNode?.data.manualInput),
+        manualInput,
+        label: targetNode?.data.label,
+      } satisfies NodeExecutionInputs;
     },
     [],
+  );
+
+  const getConnectedInputHandles = useCallback(
+    (
+      nodeId: string,
+      edgeList: Edge[] = edges,
+    ): ConnectedHandleMap => {
+      const connectedHandles: ConnectedHandleMap = {};
+
+      for (const edge of edgeList) {
+        if (edge.target !== nodeId || !edge.targetHandle) {
+          continue;
+        }
+
+        const handleId = edge.targetHandle as InputHandleId;
+        connectedHandles[handleId] = true;
+      }
+
+      return connectedHandles;
+    },
+    [edges],
   );
 
   const runNode = useCallback(
@@ -220,21 +424,12 @@ export default function FlowCanvas() {
           throw new Error("Node not found");
         }
 
-        const chainedInputs = getNodeInputs(nodeId, currentNodes, edgesRef.current);
-        const manualInput = targetNode.data.manualInput ?? "";
-        const prompt = [
-          ...chainedInputs,
-          manualInput.trim(),
-          targetNode.data.userMessage?.trim() ?? "",
-          targetNode.data.label?.trim() ?? "",
-        ]
-          .filter(Boolean)
-          .join("\n")
-          .trim();
+        const inputs = getNodeExecutionInputs(nodeId, currentNodes, edgesRef.current);
 
         // Log node execution start
         const runId = currentRunIdRef.current;
         if (runId) {
+          console.log("NodeRun init:", nodeId);
           const initResponse = await fetch("/api/node-run/init", {
             method: "POST",
             headers: {
@@ -244,14 +439,16 @@ export default function FlowCanvas() {
               runId,
               nodeId,
               nodeType: targetNode.type,
-              input: { prompt },
+              input: inputs,
             }),
           });
 
-          if (initResponse.ok) {
-            const { nodeRunId } = (await initResponse.json()) as { nodeRunId: string };
-            nodeRunIdsRef.current.set(nodeId, nodeRunId);
+          if (!initResponse.ok) {
+            throw new Error("NodeRun init failed");
           }
+
+          const { nodeRunId } = (await initResponse.json()) as { nodeRunId: string };
+          nodeRunIdsRef.current.set(nodeId, nodeRunId);
         }
 
         const response = await fetch("/api/run-node", {
@@ -259,26 +456,46 @@ export default function FlowCanvas() {
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ prompt }),
+          body: JSON.stringify({
+            nodeId,
+            nodeType: targetNode.type,
+            inputs,
+          }),
         });
 
         if (!response.ok) {
           throw new Error("Task execution failed");
         }
 
-        const result = (await response.json()) as { output?: string };
-        const outputText = result.output?.trim() || "No output";
+        const result = (await response.json()) as {
+          output?: unknown;
+          type?: "text" | "image" | "video";
+        };
+        const outputText =
+          typeof result.output === "string"
+            ? result.output.trim() || "No output"
+            : JSON.stringify(result.output ?? "No output");
 
         // Log node execution success
         const nodeRunId = nodeRunIdsRef.current.get(nodeId);
         if (nodeRunId && runId) {
-          await fetch(`/api/node-run/${nodeRunId}/complete`, {
+          console.log("NodeRun complete:", nodeId);
+          const completeResponse = await fetch(`/api/node-run/${nodeRunId}/complete`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ output: outputText }),
+            body: JSON.stringify({
+              output: {
+                output: result.output ?? outputText,
+                type: result.type || "text",
+              },
+            }),
           });
+
+          if (!completeResponse.ok) {
+            throw new Error("NodeRun update failed");
+          }
         }
 
         setNodes((currentNodes) =>
@@ -296,25 +513,32 @@ export default function FlowCanvas() {
           ),
         );
       } catch (error) {
+        console.error("Node execution failed:", { nodeId, error });
+
         // Log node execution failure
         const nodeRunId = nodeRunIdsRef.current.get(nodeId);
         const runId = currentRunIdRef.current;
         if (nodeRunId && runId) {
           const errorMessage =
             error instanceof Error ? error.message : "Unknown error";
-          await fetch(`/api/node-run/${nodeRunId}/fail`, {
+          const failResponse = await fetch(`/api/node-run/${nodeRunId}/fail`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({ error: errorMessage }),
           });
+
+          if (!failResponse.ok) {
+            throw new Error("NodeRun update failed");
+          }
         }
 
         setNodeStatus(nodeId, "failed");
+        throw error;
       }
     },
-    [getNodeInputs, setNodeStatus, setNodes],
+    [getNodeExecutionInputs, setNodeStatus, setNodes],
   );
 
   const executeNodeSet = useCallback(
@@ -362,7 +586,14 @@ export default function FlowCanvas() {
       );
 
       while (currentLevel.length > 0) {
-        await Promise.all(currentLevel.map((nodeId) => runNode(nodeId)));
+        await Promise.all(
+          currentLevel.map((nodeId) =>
+            runNode(nodeId).catch((error) => {
+              console.error("runNode failed in executeNodeSet:", { nodeId, error });
+              throw error;
+            }),
+          ),
+        );
 
         const nextLevel: string[] = [];
 
@@ -383,68 +614,117 @@ export default function FlowCanvas() {
     [edges, nodes, runNode, setNodes],
   );
 
-  const executeWorkflow = useCallback(async () => {
-    try {
-      // Initialize workflow run
-      if (!workflowId) {
-        setWorkflowMessage("Please save workflow first");
-        return;
-      }
+  const initializeWorkflowExecution = useCallback(async () => {
+    if (!workflowId) {
+      throw new Error("Please save workflow first");
+    }
 
-      const initRunResponse = await fetch("/api/workflow-run/init", {
+    const initRunResponse = await fetch("/api/workflow-run/init", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ workflowId }),
+    });
+
+    if (!initRunResponse.ok) {
+      throw new Error("Failed to initialize workflow run");
+    }
+
+    const { runId } = (await initRunResponse.json()) as { runId: string };
+    currentRunIdRef.current = runId;
+    nodeRunIdsRef.current.clear();
+    return runId;
+  }, [workflowId]);
+
+  const completeWorkflowExecution = useCallback(
+    async (runId: string, status: "success" | "failed") => {
+      await fetch(`/api/workflow-run/${runId}/complete`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ workflowId }),
+        body: JSON.stringify({ status }),
       });
+    },
+    [],
+  );
 
-      if (!initRunResponse.ok) {
-        throw new Error("Failed to initialize workflow run");
+  const ensureWorkflowRunForNodeExecution = useCallback(async () => {
+    if (currentRunIdRef.current) {
+      return currentRunIdRef.current;
+    }
+
+    return initializeWorkflowExecution();
+  }, [initializeWorkflowExecution]);
+
+  const executeWorkflow = useCallback(async () => {
+    try {
+      const cycleExists = hasDirectedCycle(
+        nodesRef.current.map((node) => ({ id: node.id })),
+        edgesRef.current.map((edge) => ({
+          source: edge.source,
+          target: edge.target,
+        })),
+      );
+
+      if (cycleExists) {
+        setWorkflowMessage(
+          "Workflow contains a cycle. Remove circular connections before running.",
+        );
+        return;
       }
 
-      const { runId } = (await initRunResponse.json()) as { runId: string };
-      currentRunIdRef.current = runId;
-      nodeRunIdsRef.current.clear();
+      const runId = await initializeWorkflowExecution();
 
       try {
         // Execute all nodes
         await executeNodeSet(new Set(nodes.map((node) => node.id)));
 
         // Complete workflow run
-        await fetch(`/api/workflow-run/${runId}/complete`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ status: "success" }),
-        });
+        await completeWorkflowExecution(runId, "success");
 
         setWorkflowMessage(`Workflow completed. Run ID: ${runId}`);
       } catch (error) {
         // Mark workflow as failed
-        await fetch(`/api/workflow-run/${runId}/complete`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ status: "failed" }),
-        });
+        await completeWorkflowExecution(runId, "failed");
 
         throw error;
+      } finally {
+        currentRunIdRef.current = null;
+        nodeRunIdsRef.current.clear();
+        setHistoryRefreshKey((prev) => prev + 1);
       }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Workflow execution failed";
       setWorkflowMessage(message);
     }
-  }, [executeNodeSet, nodes, workflowId]);
+  }, [completeWorkflowExecution, executeNodeSet, initializeWorkflowExecution, nodes]);
 
   const runSingleNode = useCallback(
     async (nodeId: string) => {
-      await executeNodeSet(new Set([nodeId]));
+      try {
+        const runId = await ensureWorkflowRunForNodeExecution();
+        await executeNodeSet(new Set([nodeId]));
+        await completeWorkflowExecution(runId, "success");
+        setWorkflowMessage(`Node run completed. Run ID: ${runId}`);
+      } catch (error) {
+        const runId = currentRunIdRef.current;
+        if (runId) {
+          await completeWorkflowExecution(runId, "failed");
+        }
+
+        const message =
+          error instanceof Error ? error.message : "Node execution failed";
+        setWorkflowMessage(message);
+      } finally {
+        currentRunIdRef.current = null;
+        nodeRunIdsRef.current.clear();
+        setHistoryRefreshKey((prev) => prev + 1);
+      }
     },
-    [executeNodeSet],
+    [completeWorkflowExecution, ensureWorkflowRunForNodeExecution, executeNodeSet],
   );
 
   const handleDeleteNode = useCallback(
@@ -484,11 +764,34 @@ export default function FlowCanvas() {
 
   const executePartial = useCallback(
     async (nodeId: string) => {
-      const nodesToExecute = getAllParentNodes(nodeId);
-      nodesToExecute.add(nodeId);
-      await executeNodeSet(nodesToExecute);
+      try {
+        const runId = await ensureWorkflowRunForNodeExecution();
+        const nodesToExecute = getAllParentNodes(nodeId);
+        nodesToExecute.add(nodeId);
+        await executeNodeSet(nodesToExecute);
+        await completeWorkflowExecution(runId, "success");
+        setWorkflowMessage(`Partial run completed. Run ID: ${runId}`);
+      } catch (error) {
+        const runId = currentRunIdRef.current;
+        if (runId) {
+          await completeWorkflowExecution(runId, "failed");
+        }
+
+        const message =
+          error instanceof Error ? error.message : "Partial execution failed";
+        setWorkflowMessage(message);
+      } finally {
+        currentRunIdRef.current = null;
+        nodeRunIdsRef.current.clear();
+        setHistoryRefreshKey((prev) => prev + 1);
+      }
     },
-    [executeNodeSet, getAllParentNodes],
+    [
+      completeWorkflowExecution,
+      ensureWorkflowRunForNodeExecution,
+      executeNodeSet,
+      getAllParentNodes,
+    ],
   );
 
   const nodesWithConnectionState = useMemo(() => {
@@ -498,9 +801,12 @@ export default function FlowCanvas() {
         ...node.data,
         status: node.data.status ?? "idle",
         isInputConnected: edges.some((edge) => edge.target === node.id),
+        connectedHandles: getConnectedInputHandles(node.id, edges),
         onManualInputChange: handleManualInputChange,
         onSystemPromptChange: handleSystemPromptChange,
         onUserMessageChange: handleUserMessageChange,
+        onImageUpload: handleImageUpload,
+        onVideoUpload: handleVideoUpload,
         onRunSingle: runSingleNode,
         onRunPartial: executePartial,
         onDeleteNode: handleDeleteNode,
@@ -510,16 +816,63 @@ export default function FlowCanvas() {
     edges,
     executePartial,
     handleDeleteNode,
+    getConnectedInputHandles,
+    handleImageUpload,
     handleManualInputChange,
     handleSystemPromptChange,
     handleUserMessageChange,
+    handleVideoUpload,
     nodes,
     runSingleNode,
   ]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
-      setEdges((currentEdges) => addEdge(connection, currentEdges));
+      setEdges((currentEdges) => {
+        if (!connection.source || !connection.target) {
+          setWorkflowMessage("Invalid connection type");
+          return currentEdges;
+        }
+
+        const sourceNode = nodesRef.current.find(
+          (node) => node.id === connection.source,
+        );
+        const targetNode = nodesRef.current.find(
+          (node) => node.id === connection.target,
+        );
+
+        if (!sourceNode?.type || !targetNode?.type) {
+          setWorkflowMessage("Invalid connection type");
+          return currentEdges;
+        }
+
+        const isTypeCompatible = isConnectionTypeCompatible(
+          sourceNode.type,
+          targetNode.type,
+        );
+
+        if (!isTypeCompatible) {
+          setWorkflowMessage("Invalid connection type");
+          return currentEdges;
+        }
+
+        const candidateEdges = addEdge(connection, currentEdges);
+
+        const cycleExists = hasDirectedCycle(
+          nodesRef.current.map((node) => ({ id: node.id })),
+          candidateEdges.map((edge) => ({
+            source: edge.source,
+            target: edge.target,
+          })),
+        );
+
+        if (cycleExists) {
+          setWorkflowMessage("This connection would create a cycle");
+          return currentEdges;
+        }
+
+        return candidateEdges;
+      });
     },
     [setEdges],
   );
@@ -540,36 +893,73 @@ export default function FlowCanvas() {
     setWorkflowMessage("");
 
     try {
-      const response = await fetch("/api/workflow/save", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          nodes: nodesRef.current,
-          edges: edgesRef.current,
-        }),
-      });
-
-      const payload = (await response.json()) as {
-        workflowId?: string;
-        error?: string;
+      const payload = {
+        nodes: nodesRef.current,
+        edges: edgesRef.current,
+        name: workflowName.trim() || "Untitled Workflow",
       };
 
-      if (!response.ok || !payload.workflowId) {
-        throw new Error(payload.error || "Failed to save workflow");
-      }
+      if (workflowId.trim()) {
+        const response = await fetch(`/api/workflow/${encodeURIComponent(workflowId)}`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
 
-      setWorkflowId(payload.workflowId);
-      window.localStorage.setItem(WORKFLOW_ID_STORAGE_KEY, payload.workflowId);
-      setWorkflowMessage(`Saved workflow: ${payload.workflowId}`);
+        const responseBody = (await response.json()) as {
+          success?: boolean;
+          error?: string;
+        };
+
+        if (!response.ok || !responseBody.success) {
+          throw new Error(responseBody.error || "Failed to update workflow");
+        }
+
+        lastSavedSnapshotRef.current = getWorkflowSnapshot(
+          nodesRef.current,
+          edgesRef.current,
+          workflowName,
+        );
+        setWorkflowMessage(`Saved workflow: ${workflowId}`);
+      } else {
+        const response = await fetch("/api/workflows", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        const responseBody = (await response.json()) as {
+          workflow?: { id?: string };
+          error?: string;
+        };
+
+        const createdWorkflowId = responseBody.workflow?.id;
+
+        if (!response.ok || !createdWorkflowId) {
+          throw new Error(responseBody.error || "Failed to create workflow");
+        }
+
+        setWorkflowId(createdWorkflowId);
+        window.localStorage.setItem(WORKFLOW_ID_STORAGE_KEY, createdWorkflowId);
+        router.replace(`/builder?workflowId=${createdWorkflowId}`);
+        lastSavedSnapshotRef.current = getWorkflowSnapshot(
+          nodesRef.current,
+          edgesRef.current,
+          workflowName,
+        );
+        setWorkflowMessage(`Saved workflow: ${createdWorkflowId}`);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to save workflow";
       setWorkflowMessage(message);
     } finally {
       setIsSavingWorkflow(false);
     }
-  }, []);
+  }, [getWorkflowSnapshot, router, workflowId, workflowName]);
 
   const loadWorkflow = useCallback(
     async (idToLoad: string) => {
@@ -580,6 +970,7 @@ export default function FlowCanvas() {
         return;
       }
 
+      isAutoSaveSuspendedRef.current = true;
       setIsLoadingWorkflow(true);
       setWorkflowMessage("");
 
@@ -589,6 +980,7 @@ export default function FlowCanvas() {
           id?: string;
           nodes?: unknown;
           edges?: unknown;
+          name?: string | null;
           error?: string;
         };
 
@@ -606,13 +998,16 @@ export default function FlowCanvas() {
         );
 
         const resolvedId = payload.id ?? trimmedId;
+        const resolvedName = payload.name?.trim() ? payload.name : "Untitled Workflow";
         setWorkflowId(resolvedId);
+        setWorkflowName(resolvedName);
         window.localStorage.setItem(WORKFLOW_ID_STORAGE_KEY, resolvedId);
         setWorkflowMessage(`Loaded workflow: ${resolvedId}`);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to load workflow";
         setWorkflowMessage(message);
       } finally {
+        isAutoSaveSuspendedRef.current = false;
         setIsLoadingWorkflow(false);
       }
     },
@@ -620,15 +1015,95 @@ export default function FlowCanvas() {
   );
 
   useEffect(() => {
+    isAutoSaveSuspendedRef.current = true;
+
+    const workflowIdFromQuery = searchParams.get("workflowId")?.trim();
+
+    if (workflowIdFromQuery) {
+      setWorkflowId(workflowIdFromQuery);
+      window.localStorage.setItem(WORKFLOW_ID_STORAGE_KEY, workflowIdFromQuery);
+      void loadWorkflow(workflowIdFromQuery);
+      return;
+    }
+
+    const templateIdFromQuery = searchParams.get("templateId")?.trim();
+
+    if (templateIdFromQuery) {
+      const template = getWorkflowTemplateById(templateIdFromQuery);
+
+      if (!template) {
+        setWorkflowMessage(`Template not found: ${templateIdFromQuery}`);
+        return;
+      }
+
+      applyLoadedWorkflow(
+        template.nodes as Node<NodeData, NodeType>[],
+        template.edges as Edge[],
+      );
+
+      setWorkflowId("");
+      setWorkflowName(template.name || "Untitled Workflow");
+      window.localStorage.removeItem(WORKFLOW_ID_STORAGE_KEY);
+      setWorkflowMessage(`Loaded template: ${template.name}`);
+      isAutoSaveSuspendedRef.current = false;
+      return;
+    }
+
+    const isNewWorkflow = searchParams.get("new") === "1";
+
+    if (isNewWorkflow) {
+      applyLoadedWorkflow(emptyNodes, emptyEdges);
+      setWorkflowId("");
+      setWorkflowName("Untitled Workflow");
+      window.localStorage.removeItem(WORKFLOW_ID_STORAGE_KEY);
+      setWorkflowMessage("New workflow draft");
+      isAutoSaveSuspendedRef.current = false;
+      return;
+    }
+
     const storedWorkflowId = window.localStorage.getItem(WORKFLOW_ID_STORAGE_KEY);
 
     if (!storedWorkflowId) {
+      isAutoSaveSuspendedRef.current = false;
       return;
     }
 
     setWorkflowId(storedWorkflowId);
     void loadWorkflow(storedWorkflowId);
-  }, [loadWorkflow]);
+  }, [applyLoadedWorkflow, loadWorkflow, searchParams]);
+
+  useEffect(() => {
+    const currentSnapshot = getWorkflowSnapshot(nodes, edges, workflowName);
+
+    if (isAutoSaveSuspendedRef.current) {
+      lastSavedSnapshotRef.current = currentSnapshot;
+      return;
+    }
+
+    if (!lastSavedSnapshotRef.current) {
+      lastSavedSnapshotRef.current = currentSnapshot;
+      return;
+    }
+
+    if (currentSnapshot === lastSavedSnapshotRef.current) {
+      return;
+    }
+
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+    }
+
+    autoSaveTimeoutRef.current = setTimeout(() => {
+      setWorkflowMessage("Saving...");
+      void saveWorkflow();
+    }, 1000);
+
+    return () => {
+      if (autoSaveTimeoutRef.current) {
+        clearTimeout(autoSaveTimeoutRef.current);
+      }
+    };
+  }, [edges, getWorkflowSnapshot, nodes, saveWorkflow, workflowName]);
 
   const addNode = useCallback((type: NodeType) => {
     const id = String(nextNodeId.current);
@@ -655,7 +1130,7 @@ export default function FlowCanvas() {
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(67,97,238,0.08),transparent_34%),radial-gradient(circle_at_80%_75%,rgba(56,189,248,0.08),transparent_30%)]" />
 
       {/* Left Sidebar - Nodes */}
-      <aside className="group absolute left-4 top-4 z-20 w-[84px] overflow-hidden rounded-3xl border border-white/10 bg-white/5 p-3 backdrop-blur-xl shadow-[0_12px_40px_rgba(0,0,0,0.3)] transition-all duration-300 hover:w-[248px]">
+      <aside className="group absolute left-4 top-1/2 z-20 w-[84px] -translate-y-1/2 overflow-hidden rounded-3xl border border-white/10 bg-white/5 p-3 backdrop-blur-xl shadow-[0_12px_40px_rgba(0,0,0,0.3)] transition-all duration-300 hover:w-[248px]">
         <h2 className="mb-3 text-sm font-semibold tracking-wide text-zinc-100">Nodes</h2>
         <div className="flex flex-col gap-2">
           {sidebarItems.map((item) => (
@@ -678,73 +1153,68 @@ export default function FlowCanvas() {
         </div>
       </aside>
 
-      {/* Top Workflow Card - compact and collision-safe */}
+      {/* Top Workflow Bar */}
       <div
-        className="absolute left-1/2 top-4 z-20 -translate-x-1/2 transition-[width] duration-300"
+        className="absolute left-4 top-4 z-20 transition-[right] duration-300"
         style={{
-          width: isHistoryOpen
-            ? "min(760px, calc(100vw - 540px))"
-            : "min(800px, calc(100vw - 220px))",
+          right: isHistoryOpen ? "404px" : "1rem",
         }}
       >
-        <div className="rounded-2xl border border-white/10 bg-white/5 px-2.5 py-2 backdrop-blur-xl shadow-[0_12px_40px_rgba(0,0,0,0.3)]">
-          <div className="grid grid-cols-12 items-center gap-1.5">
-            <p className="col-span-2 text-[11px] font-semibold tracking-wide text-zinc-100">Workflow</p>
+        <div className="rounded-2xl border border-white/10 bg-white/5 px-2.5 py-1.5 backdrop-blur-xl shadow-[0_12px_40px_rgba(0,0,0,0.3)]">
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={workflowName}
+              onChange={(event) => setWorkflowName(event.target.value)}
+              placeholder="Untitled Workflow"
+              className="h-7 min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 text-sm font-semibold text-zinc-100 outline-none transition-all placeholder:text-zinc-500 focus:border-cyan-300/40 focus:bg-white/5"
+            />
 
-            {/* Workflow ID Display */}
-            <div className="col-span-4">
-              <input
-                type="text"
-                value={workflowId}
-                onChange={(event) => setWorkflowId(event.target.value)}
-                placeholder="Workflow ID or new workflow"
-                className="h-7 w-full rounded-lg border border-white/10 bg-white/5 px-2.5 text-[11px] text-zinc-200 outline-none transition-all placeholder:text-zinc-500 focus:border-cyan-300/50 focus:bg-white/10"
-              />
-            </div>
+            <button
+              type="button"
+              onClick={() => void executeWorkflow()}
+              className="h-7 rounded-lg border border-cyan-300/30 bg-cyan-400/15 px-2.5 text-[11px] font-semibold text-cyan-100 transition-all hover:bg-cyan-400/25 hover:border-cyan-300/50"
+            >
+              Run Workflow
+            </button>
 
-            {/* Save Button */}
+            <button
+              type="button"
+              onClick={() => void reactFlowInstanceRef.current?.zoomIn({ duration: 180 })}
+              className="h-7 rounded-lg border border-white/10 bg-white/5 px-2.5 text-sm text-zinc-100 transition-all hover:bg-white/10"
+              title="Zoom in"
+            >
+              +
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void reactFlowInstanceRef.current?.zoomOut({ duration: 180 })}
+              className="h-7 rounded-lg border border-white/10 bg-white/5 px-2.5 text-sm text-zinc-100 transition-all hover:bg-white/10"
+              title="Zoom out"
+            >
+              -
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                void reactFlowInstanceRef.current?.fitView({ duration: 220, padding: 0.6 })
+              }
+              className="h-7 rounded-lg border border-white/10 bg-white/5 px-2.5 text-[11px] font-medium text-zinc-100 transition-all hover:bg-white/10"
+            >
+              Fit
+            </button>
+
             <button
               type="button"
               onClick={() => void saveWorkflow()}
               disabled={isSavingWorkflow}
-              className="col-span-2 h-7 rounded-lg border border-cyan-300/30 bg-cyan-400/15 px-1.5 text-[11px] font-semibold text-cyan-100 transition-all hover:bg-cyan-400/25 hover:border-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-50"
+              className="h-7 rounded-lg border border-cyan-300/30 bg-cyan-400/15 px-3 text-[11px] font-semibold text-cyan-100 transition-all hover:bg-cyan-400/25 hover:border-cyan-300/50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSavingWorkflow ? "Saving..." : "Save"}
             </button>
-
-            {/* Load Button */}
-            <button
-              type="button"
-              onClick={() => void loadWorkflow(workflowId)}
-              disabled={isLoadingWorkflow}
-              className="col-span-2 h-7 rounded-lg border border-white/10 bg-white/5 px-1.5 text-[11px] font-medium text-zinc-200 transition-all hover:bg-white/10 hover:border-white/20 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isLoadingWorkflow ? "Loading..." : "Load"}
-            </button>
-
-            {/* Share Button */}
-            <button
-              type="button"
-              className="col-span-1 h-7 rounded-lg border border-white/10 bg-white/5 px-1.5 text-[11px] font-medium text-zinc-200 transition-all hover:bg-white/10 hover:border-white/20"
-              title="Share workflow"
-            >
-              ↗
-            </button>
-
-            {/* Deploy Button */}
-            <button
-              type="button"
-              className="col-span-1 h-7 rounded-lg border border-white/10 bg-white/5 px-1.5 text-[11px] font-medium text-zinc-200 transition-all hover:bg-white/10 hover:border-white/20"
-              title="Deploy workflow"
-            >
-              ✓
-            </button>
           </div>
-
-          {/* Status Message */}
-          {workflowMessage ? (
-            <p className="mt-2 text-[11px] text-cyan-300 font-mono">{workflowMessage}</p>
-          ) : null}
         </div>
       </div>
 
@@ -775,45 +1245,12 @@ export default function FlowCanvas() {
           zoomable
           className="!rounded-xl !border !border-white/10 !bg-black/50 !backdrop-blur-xl"
         />
-        <Panel position="bottom-center">
-          <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 backdrop-blur-xl shadow-[0_8px_30px_rgba(0,0,0,0.3)]">
-            <button
-              type="button"
-              onClick={() => void executeWorkflow()}
-              className="rounded-lg border border-cyan-300/30 bg-cyan-400/15 px-3 py-2 text-xs font-semibold text-cyan-100 transition-all hover:bg-cyan-400/25 hover:border-cyan-300/50"
-            >
-              Run Workflow
-            </button>
-            <button
-              type="button"
-              onClick={() => void reactFlowInstanceRef.current?.zoomIn({ duration: 180 })}
-              className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-100 transition-all hover:bg-white/10"
-            >
-              +
-            </button>
-            <button
-              type="button"
-              onClick={() => void reactFlowInstanceRef.current?.zoomOut({ duration: 180 })}
-              className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-zinc-100 transition-all hover:bg-white/10"
-            >
-              −
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                void reactFlowInstanceRef.current?.fitView({ duration: 220, padding: 0.6 })
-              }
-              className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-zinc-100 transition-all hover:bg-white/10"
-            >
-              Fit
-            </button>
-          </div>
-        </Panel>
       </ReactFlow>
 
       <HistorySidebar
         workflowId={workflowId}
         isOpen={isHistoryOpen}
+        refreshKey={historyRefreshKey}
         onToggle={() => setIsHistoryOpen((currentValue) => !currentValue)}
       />
     </div>
