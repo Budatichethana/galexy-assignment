@@ -76,7 +76,7 @@ function BaseNodeCard({
 
   return (
     <div
-      className={`nowheel relative w-[360px] max-w-[360px] overflow-hidden rounded-2xl border bg-[#111319]/90 p-4 shadow-[0_10px_35px_rgba(0,0,0,0.45)] backdrop-blur-xl transition-all ${statusClassMap[status]} ${
+      className={`nowheel relative w-[360px] max-w-[360px] overflow-visible rounded-2xl border bg-[#111319]/90 p-4 shadow-[0_10px_35px_rgba(0,0,0,0.45)] backdrop-blur-xl transition-all ${statusClassMap[status]} ${
         selected
           ? "border-cyan-300/95 shadow-[0_0_0_1px_rgba(103,232,249,0.45),0_0_28px_rgba(34,211,238,0.65)]"
           : ""

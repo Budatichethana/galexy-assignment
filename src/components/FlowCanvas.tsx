@@ -184,6 +184,7 @@ export default function FlowCanvas() {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [workflowId, setWorkflowId] = useState("");
   const [workflowName, setWorkflowName] = useState("Untitled Workflow");
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [, setWorkflowMessage] = useState("");
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [isSavingWorkflow, setIsSavingWorkflow] = useState(false);
@@ -729,12 +730,59 @@ export default function FlowCanvas() {
 
   const handleDeleteNode = useCallback(
     (nodeId: string) => {
+      const selectedEdgeTouchesDeletedNode = selectedEdgeId
+        ? edgesRef.current.some(
+            (edge) =>
+              edge.id === selectedEdgeId
+              && (edge.source === nodeId || edge.target === nodeId),
+          )
+        : false;
+
       setNodes((currentNodes) => currentNodes.filter((node) => node.id !== nodeId));
       setEdges((currentEdges) =>
         currentEdges.filter((edge) => edge.source !== nodeId && edge.target !== nodeId),
       );
+
+      if (selectedEdgeTouchesDeletedNode) {
+        setSelectedEdgeId(null);
+      }
     },
-    [setEdges, setNodes],
+    [selectedEdgeId, setEdges, setNodes],
+  );
+
+  const deleteEdgeById = useCallback(
+    (edgeId: string) => {
+      setEdges((currentEdges) => currentEdges.filter((edge) => edge.id !== edgeId));
+      setSelectedEdgeId((currentSelectedEdgeId) =>
+        currentSelectedEdgeId === edgeId ? null : currentSelectedEdgeId,
+      );
+    },
+    [setEdges],
+  );
+
+  const handleEdgeClick = useCallback(
+    (_event: React.MouseEvent, edge: Edge) => {
+      setSelectedEdgeId(edge.id);
+    },
+    [],
+  );
+
+  const handleEdgeContextMenu = useCallback(
+    (event: React.MouseEvent, edge: Edge) => {
+      event.preventDefault();
+      event.stopPropagation();
+      deleteEdgeById(edge.id);
+    },
+    [deleteEdgeById],
+  );
+
+  const handleEdgesDelete = useCallback(
+    (deletedEdges: Edge[]) => {
+      if (deletedEdges.some((edge) => edge.id === selectedEdgeId)) {
+        setSelectedEdgeId(null);
+      }
+    },
+    [selectedEdgeId],
   );
 
   const getAllParentNodes = useCallback(
@@ -871,6 +919,7 @@ export default function FlowCanvas() {
           return currentEdges;
         }
 
+        setSelectedEdgeId(null);
         return candidateEdges;
       });
     },
@@ -881,11 +930,30 @@ export default function FlowCanvas() {
     (loadedNodes: Node<NodeData, NodeType>[], loadedEdges: Edge[]) => {
       setNodes(loadedNodes);
       setEdges(loadedEdges);
+      setSelectedEdgeId(null);
       nextNodeId.current = getNextNodeId(loadedNodes);
       nodesRef.current = loadedNodes;
       edgesRef.current = loadedEdges;
     },
     [setEdges, setNodes],
+  );
+
+  const edgesWithSelectionState = useMemo(
+    () =>
+      edges.map((edge) => {
+        const isSelected = edge.id === selectedEdgeId;
+
+        return {
+          ...edge,
+          selected: isSelected,
+          style: {
+            ...(edge.style ?? {}),
+            stroke: isSelected ? "#67e8f9" : edge.style?.stroke,
+            strokeWidth: isSelected ? 2.5 : edge.style?.strokeWidth,
+          },
+        };
+      }),
+    [edges, selectedEdgeId],
   );
 
   const saveWorkflow = useCallback(async () => {
@@ -1214,16 +1282,32 @@ export default function FlowCanvas() {
             >
               {isSavingWorkflow ? "Saving..." : "Save"}
             </button>
+
+            {selectedEdgeId ? (
+              <button
+                type="button"
+                onClick={() => deleteEdgeById(selectedEdgeId)}
+                className="h-7 rounded-lg border border-rose-300/30 bg-rose-500/10 px-2.5 text-[11px] font-semibold text-rose-200 transition-all hover:border-rose-300/50 hover:bg-rose-500/20"
+                title="Delete selected connection"
+              >
+                Delete Edge
+              </button>
+            ) : null}
           </div>
         </div>
       </div>
 
       <ReactFlow
         nodes={nodesWithConnectionState}
-        edges={edges}
+        edges={edgesWithSelectionState}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onEdgesDelete={handleEdgesDelete}
+        onEdgeClick={handleEdgeClick}
+        onEdgeContextMenu={handleEdgeContextMenu}
+        onPaneClick={() => setSelectedEdgeId(null)}
         onConnect={onConnect}
+        deleteKeyCode={["Backspace", "Delete"]}
         zoomOnScroll
         noWheelClassName="nowheel"
         onInit={(instance) => {

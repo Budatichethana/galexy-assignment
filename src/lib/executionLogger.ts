@@ -1,4 +1,9 @@
 import prisma from "./prisma";
+import { formatPrismaError, withPrismaRetry } from "./prismaRetry";
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * Initialize a new workflow run
@@ -95,16 +100,52 @@ export async function completeWorkflowRun(
  * Get all runs for a workflow
  */
 export async function getWorkflowRuns(workflowId: string, userId: string) {
-  const runs = await prisma.workflowRun.findMany({
-    where: { workflowId, userId },
-    include: {
-      nodeRuns: {
-        orderBy: { startedAt: "asc" },
-      },
-    },
-    orderBy: { createdAt: "desc" },
-  });
-  return runs;
+  const normalizedWorkflowId = workflowId?.trim();
+  const normalizedUserId = userId?.trim();
+
+  if (!normalizedWorkflowId) {
+    throw new Error("workflowId is required");
+  }
+
+  if (!normalizedUserId) {
+    throw new Error("userId is required");
+  }
+
+  const maxConsistencyRetries = 2;
+  const consistencyDelayMs = 150;
+
+  try {
+    for (let attempt = 0; attempt <= maxConsistencyRetries; attempt += 1) {
+      const runs = await withPrismaRetry(() =>
+        prisma.workflowRun.findMany({
+          where: { workflowId: normalizedWorkflowId, userId: normalizedUserId },
+          include: {
+            nodeRuns: {
+              orderBy: { startedAt: "asc" },
+            },
+          },
+          orderBy: { createdAt: "desc" },
+        }),
+      );
+
+      if (runs.length > 0 || attempt === maxConsistencyRetries) {
+        return runs;
+      }
+
+      // Workflow runs may be created immediately before this read; retry briefly to avoid racey empty reads.
+      await sleep(consistencyDelayMs);
+    }
+
+    return [];
+  } catch (error) {
+    console.error("[ExecutionLogger] getWorkflowRuns failed", {
+      workflowId: normalizedWorkflowId,
+      userId: normalizedUserId,
+      error,
+      message: formatPrismaError(error),
+    });
+    throw error;
+  }
 }
 
 /**

@@ -3,28 +3,39 @@ import { auth } from "@clerk/nextjs/server";
 import {
   getWorkflowRuns,
 } from "@/lib/executionLogger";
+import { formatPrismaError } from "@/lib/prismaRetry";
 
 export async function GET(
   _request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   try {
-    const { userId } = await auth();
+    const authState = await auth();
+    const userId = authState.userId?.trim();
+
     if (!userId) {
-      return new Response("Unauthorized", { status: 401 });
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const { id } = await context.params;
+    const workflowId = id?.trim();
 
-    if (!id) {
+    if (!workflowId) {
       return NextResponse.json({ error: "Workflow ID is required" }, { status: 400 });
     }
 
-    const runs = await getWorkflowRuns(id, userId);
+    const runs = await getWorkflowRuns(workflowId, userId);
 
     return NextResponse.json({ runs });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to fetch workflow runs";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const message = formatPrismaError(error) || "Failed to fetch workflow runs";
+    const status = /required|invalid/i.test(message) ? 400 : 500;
+
+    console.error("[WorkflowRuns API] GET failed", {
+      message,
+      error,
+    });
+
+    return NextResponse.json({ error: message }, { status });
   }
 }
