@@ -1,13 +1,14 @@
-import { PrismaClient } from "@/generated/prisma/client";
+import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { Pool } from "pg";
+import pg from "pg";
 
-type GlobalWithPrisma = {
-  prismaClient?: PrismaClient;
-  prismaPool?: Pool;
+const { Pool } = pg;
+type PgPool = InstanceType<typeof Pool>;
+
+const globalForPrisma = globalThis as unknown as {
+  prisma: PrismaClient | undefined;
+  prismaPool: PgPool | undefined;
 };
-
-const globalForPrisma = global as GlobalWithPrisma;
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
@@ -15,35 +16,30 @@ if (!connectionString) {
 }
 
 const prismaPool =
-  globalForPrisma.prismaPool ||
+  globalForPrisma.prismaPool ??
   new Pool({
     connectionString,
-    connectionTimeoutMillis: 15000, // 15 second timeout for acquiring connection
-    idleTimeoutMillis: 20000, // 20 second idle timeout
+    connectionTimeoutMillis: 15000,
+    idleTimeoutMillis: 20000,
     max: process.env.NODE_ENV === "development" ? 3 : 10,
   });
 
 if (!globalForPrisma.prismaPool) {
-  prismaPool.on("error", (err) => {
-    console.error("[Prisma Pool] Unexpected error on idle connection", err);
+  prismaPool.on("error", (error: Error) => {
+    console.error("[Prisma Pool] Unexpected error on idle connection", error);
   });
 }
 
-const adapter = new PrismaPg(prismaPool);
-
-const prismaClient =
-  globalForPrisma.prismaClient ||
+const prisma =
+  globalForPrisma.prisma ??
   new PrismaClient({
-    adapter,
-    log:
-      process.env.NODE_ENV === "development"
-        ? ["error", "warn"]
-        : ["error"],
+    adapter: new PrismaPg(prismaPool),
+    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
   });
 
 if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.prisma = prisma;
   globalForPrisma.prismaPool = prismaPool;
-  globalForPrisma.prismaClient = prismaClient;
 }
 
-export default prismaClient;
+export default prisma;

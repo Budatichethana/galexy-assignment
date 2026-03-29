@@ -32,7 +32,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+function withTimeout<T>(promise: PromiseLike<T>, timeoutMs: number): Promise<T> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   const timeoutPromise = new Promise<T>((_, reject) => {
@@ -41,7 +41,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
     }, timeoutMs);
   });
 
-  return Promise.race([promise, timeoutPromise]).finally(() => {
+  return Promise.race([Promise.resolve(promise), timeoutPromise]).finally(() => {
     if (timeoutId) {
       clearTimeout(timeoutId);
     }
@@ -53,7 +53,7 @@ const BACKOFF_DELAYS = [300, 700, 1500];
 const DEFAULT_OPERATION_TIMEOUT_MS = 30000; // Increased from 12s to 30s
 
 export async function withPrismaRetry<T>(
-  operation: () => Promise<T>,
+  operation: () => PromiseLike<T>,
   maxRetries = 3,
   operationTimeoutMs = DEFAULT_OPERATION_TIMEOUT_MS,
 ): Promise<T> {

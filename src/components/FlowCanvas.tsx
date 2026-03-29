@@ -77,7 +77,7 @@ const sidebarItems = [
     ),
 }));
 
-const emptyNodes: Node<NodeData, NodeType>[] = [];
+const emptyNodes: Node<NodeData>[] = [];
 const emptyEdges: Edge[] = [];
 
 const WORKFLOW_ID_STORAGE_KEY = "nextflow:workflowId";
@@ -179,7 +179,7 @@ function getNextNodeId(nodeList: Array<{ id: string }>) {
 export default function FlowCanvas() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<NodeData>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [workflowId, setWorkflowId] = useState("");
@@ -210,7 +210,7 @@ export default function FlowCanvas() {
   }, [edges]);
 
   const getWorkflowSnapshot = useCallback(
-    (currentNodes: Node<NodeData, NodeType>[], currentEdges: Edge[], currentName: string) =>
+    (currentNodes: Node<NodeData>[], currentEdges: Edge[], currentName: string) =>
       JSON.stringify({
         nodes: currentNodes,
         edges: currentEdges,
@@ -927,7 +927,7 @@ export default function FlowCanvas() {
   );
 
   const applyLoadedWorkflow = useCallback(
-    (loadedNodes: Node<NodeData, NodeType>[], loadedEdges: Edge[]) => {
+    (loadedNodes: Node<NodeData>[], loadedEdges: Edge[]) => {
       setNodes(loadedNodes);
       setEdges(loadedEdges);
       setSelectedEdgeId(null);
@@ -1061,7 +1061,7 @@ export default function FlowCanvas() {
         }
 
         applyLoadedWorkflow(
-          payload.nodes as Node<NodeData, NodeType>[],
+          payload.nodes as Node<NodeData>[],
           payload.edges as Edge[],
         );
 
@@ -1105,7 +1105,7 @@ export default function FlowCanvas() {
       }
 
       applyLoadedWorkflow(
-        template.nodes as Node<NodeData, NodeType>[],
+        template.nodes as Node<NodeData>[],
         template.edges as Edge[],
       );
 
